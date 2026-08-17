@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import numpy as np
 from typing import Any, Optional
 
 from .compressor_registry import CompressInput, CompressOutput
@@ -78,6 +77,7 @@ class MLTextCompressor:
 
         # Run inference
         try:
+            import numpy as np
             input_ids = np.array([tokens], dtype=np.int64)
             attention_mask_arr = np.array([attention_mask], dtype=np.int64)
 

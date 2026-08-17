@@ -133,7 +133,7 @@ class TransformPipeline:
     ) -> TransformResult:
         """Run the full compression pipeline on messages."""
         if not messages:
-            return TransformResult(messages=[])
+            return TransformResult(messages=[], tokens_before=0, tokens_after=0, transforms_applied=[])
 
         tokens_before = count_tokens_messages(messages, model)
         config = config or CompressConfig()
@@ -142,8 +142,9 @@ class TransformPipeline:
 
         current_messages = list(messages)
 
-        # Phase 1: Output shaping
+        # Phase 1: Output shaping (pass protect_recent to avoid modifying protected messages)
         if self.output_shaping:
+            self.output_shaper.protect_recent = config.protect_recent
             current_messages = self.output_shaper.apply(current_messages)
             self._applied_transforms.append("output_shaper")
 

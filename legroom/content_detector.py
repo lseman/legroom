@@ -45,7 +45,7 @@ class ContentDetector:
 
         # Check for code
         keywords_found = sum(1 for kw in self.CODE_KEYWORDS if kw in stripped)
-        if keywords_found >= 2 or "```" in stripped:
+        if keywords_found >= 1 or "```" in stripped:
             return "code"
 
         return "text"

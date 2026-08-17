@@ -40,7 +40,12 @@ class CodeCompressor:
             result.append(f"```{lang}\n{normalized}\n```")
 
         # Replace code blocks in original
-        compressed = re.sub(r"```(\w*)\n.*?```", lambda m: f"```{m.group(1)}\n{re.sub(r'[ \t]+', ' ', m.group(2)).strip()}\n```", content, flags=re.DOTALL)
+        def _replace_block(m: Any) -> str:
+            lang = m.group(1) or ""
+            code = m.group(2)
+            normalized = re.sub(r'[ \t]+', ' ', code).strip()
+            return f"```{lang}\n{normalized}\n```"
+        compressed = re.sub(r"```(\w*)\n(.*?)```", _replace_block, content, flags=re.DOTALL)
 
         tokens_before = len(content) // 4
         tokens_after = len(compressed) // 4
