@@ -1,0 +1,32 @@
+# Bytecode
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Virtual environment
+.venv/
+venv/
+env/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Models (large binary files)
+models/
+!models/.gitkeep
+
+# Build/dist
+dist/
+build/
+*.egg-info/
+
+# Logs
+*.log
