@@ -16,6 +16,12 @@ from .cross_turn_dedup import DedupBlock, dedup_blocks
 from .recursive_json import route_embedded_json
 from .lossless_compaction import compact_lossless, LosslessResult
 from .adaptive_sizer import compute_optimal_k, count_unique_simhash
+from .read_lifecycle import (
+    ReadLifecycleConfig,
+    ReadLifecycleResult,
+    ReadState,
+    classify_reads,
+)
 
 # Pipeline
 from .pipeline import TransformPipeline, create_default_pipeline, TransformResult
@@ -53,6 +59,10 @@ __all__ = [
     "LosslessResult",
     "compute_optimal_k",
     "count_unique_simhash",
+    "ReadLifecycleConfig",
+    "ReadLifecycleResult",
+    "ReadState",
+    "classify_reads",
     "TransformPipeline",
     "create_default_pipeline",
     "TransformResult",

@@ -26,6 +26,15 @@ class CompressConfig:
     output_shaping: bool = True
     thinking_compact_enabled: bool = False
     cross_turn_dedup_enabled: bool = True
+    read_lifecycle_enabled: bool = True
+    # Read Lifecycle settings
+    compress_stale: bool = True
+    compress_superseded: bool = True
+    min_read_lifecycle_bytes: int = 50
+    # Read Maturation settings
+    maturation_enabled: bool = False
+    maturation_quiesce_turns: int = 5
+    maturation_max_hold_turns: int = 50
 
 
 @dataclass

@@ -13,6 +13,7 @@ from .adaptive_sizer import compute_optimal_k
 from .cross_turn_dedup import DedupBlock, dedup_blocks
 from .recursive_json import route_embedded_json
 from .lossless_compaction import compact_lossless
+from .read_lifecycle import classify_reads, ReadLifecycleConfig, ReadLifecycleResult
 from .output.shaper import OutputShaper
 from .ccr.tool_injection import CCRToolInjector
 
@@ -174,6 +175,28 @@ class TransformPipeline:
                 self._applied_transforms.append("cross_turn_dedup")
             except Exception as e:
                 logger.warning(f"CrossTurnDedup failed: {e}")
+
+        # Phase 2.6: Read Lifecycle — compress stale/superseded Read outputs
+        if getattr(config, "read_lifecycle_enabled", True):
+            try:
+                lifecycle_config = ReadLifecycleConfig(
+                    enabled=True,
+                    compress_stale=getattr(config, "compress_stale", True),
+                    compress_superseded=getattr(config, "compress_superseded", True),
+                    min_size_bytes=getattr(config, "min_read_lifecycle_bytes", 50),
+                )
+                lifecycle_result = classify_reads(
+                    current_messages, lifecycle_config, None
+                )
+                current_messages = lifecycle_result.messages
+                if lifecycle_result.reads_stale > 0 or lifecycle_result.reads_superseded > 0:
+                    self._applied_transforms.append("read_lifecycle")
+                    self._warnings.append(
+                        f"read_lifecycle: {lifecycle_result.reads_stale} stale, "
+                        f"{lifecycle_result.reads_superseded} superseded reads compressed"
+                    )
+            except Exception as e:
+                logger.warning(f"ReadLifecycle failed: {e}")
 
         # Phase 3: Compression
         if self.compress_enabled:
