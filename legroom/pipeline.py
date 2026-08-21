@@ -87,8 +87,21 @@ class CompressPhase:
         cache: ContentHashCache | None = None,
         adaptive_sizing: bool = False,
         size_bias: float = 1.0,
+        ml_compress_enabled: bool = False,
+        ml_model_path: str | None = None,
+        ml_tokenizer_path: str | None = None,
+        ml_retention_threshold: float = 0.5,
+        ml_min_compression_ratio: float = 0.1,
     ) -> None:
-        self._router = ContentRouter(adaptive_sizing=adaptive_sizing, size_bias=size_bias)
+        self._router = ContentRouter(
+            adaptive_sizing=adaptive_sizing,
+            size_bias=size_bias,
+            ml_compress_enabled=ml_compress_enabled,
+            ml_model_path=ml_model_path,
+            ml_tokenizer_path=ml_tokenizer_path,
+            ml_retention_threshold=ml_retention_threshold,
+            ml_min_compression_ratio=ml_min_compression_ratio,
+        )
         self._cache = cache or ContentHashCache()
 
     def apply(
@@ -197,6 +210,11 @@ class TransformPipeline:
         verbosity_level: int = 2,
         adaptive_sizing: bool = False,
         size_bias: float = 1.0,
+        ml_compress_enabled: bool = False,
+        ml_model_path: str | None = None,
+        ml_tokenizer_path: str | None = None,
+        ml_retention_threshold: float = 0.5,
+        ml_min_compression_ratio: float = 0.1,
     ) -> None:
         self.compress_enabled = compress_enabled
         self.cache_align_enabled = cache_align_enabled
@@ -207,7 +225,15 @@ class TransformPipeline:
         self.verbosity_level = verbosity_level
 
         self.cache_aligner = CacheAligner(enabled=cache_align_enabled)
-        self.compressor = CompressPhase(adaptive_sizing=adaptive_sizing, size_bias=size_bias)
+        self.compressor = CompressPhase(
+            adaptive_sizing=adaptive_sizing,
+            size_bias=size_bias,
+            ml_compress_enabled=ml_compress_enabled,
+            ml_model_path=ml_model_path,
+            ml_tokenizer_path=ml_tokenizer_path,
+            ml_retention_threshold=ml_retention_threshold,
+            ml_min_compression_ratio=ml_min_compression_ratio,
+        )
         self.thinking_compactor = ThinkingCompactor()
         self.output_shaper = OutputShaper(verbosity_level=verbosity_level)
         self._applied_transforms: list[str] = []

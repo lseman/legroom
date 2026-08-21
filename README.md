@@ -216,6 +216,31 @@ compressor = MLTextCompressor(
 | `onnx/kompress-fp32.onnx` | 572 MB | Kompress-v2-base ONNX model (FP32) |
 | `tokenizer.json` | 3.5 MB | HuggingFace tokenizer vocab |
 
+### Enabling it in the pipeline (opt-in)
+
+`compress()` never uses the ML compressor unless you ask for it — it's lossy
+(drops low-score tokens from plain text) and needs the optional deps and
+model files above, so it stays off by default:
+
+```python
+from legroom import compress, CompressConfig
+
+config = CompressConfig(
+    ml_compress_enabled=True,
+    # optional overrides — otherwise uses the paths under models/kompress-v2-base/
+    ml_model_path="models/kompress-v2-base/onnx/kompress-fp32.onnx",
+    ml_tokenizer_path="models/kompress-v2-base/tokenizer.json",
+    retention_threshold=0.5,       # higher = keep more tokens
+    min_compression_ratio=0.1,     # floor on how much must be dropped to accept
+)
+result = compress(messages, model="gpt-4o", config=config)
+```
+
+If `legroom[ml]` isn't installed or the model files aren't present, this
+degrades gracefully: a warning is logged once at startup (or compression
+silently falls back per-message) and plain lossless text compression is
+used instead — it never raises or blocks the rest of the pipeline.
+
 ## License
 
 MIT

@@ -43,6 +43,11 @@ def compress(
         verbosity_level=cfg.verbosity_level,
         adaptive_sizing=cfg.adaptive_sizing,
         size_bias=cfg.size_bias,
+        ml_compress_enabled=cfg.ml_compress_enabled,
+        ml_model_path=cfg.ml_model_path,
+        ml_tokenizer_path=cfg.ml_tokenizer_path,
+        ml_retention_threshold=cfg.retention_threshold,
+        ml_min_compression_ratio=cfg.min_compression_ratio,
     )
 
     result = pipeline.apply(messages, model=model, config=cfg)

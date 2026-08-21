@@ -238,3 +238,41 @@ def test_compression_with_embedded_json():
     result = router.compress(text, source_hint="api")
     assert result is not None
     assert result.tokens_saved >= 0
+
+
+# ---------------------------------------------------------------------------
+# ML compressor opt-in wiring
+# ---------------------------------------------------------------------------
+
+
+def test_ml_compress_disabled_by_default():
+    """ml_compress_enabled defaults to False — no MLTextCompressor is built."""
+    router = ContentRouter()
+    assert router._ml_compressor is None
+
+
+def test_ml_compress_enabled_without_optional_deps_falls_back():
+    """Requesting ML compression without onnxruntime/tokenizers installed
+    (or without model files present) must not raise — it should silently
+    fall back to the lossless text compressor."""
+    router = ContentRouter(ml_compress_enabled=True)
+    # Either the optional deps are missing (constructor caught ImportError,
+    # _ml_compressor stays None) or they're present but the model file
+    # isn't (compress() itself falls back) — both are valid, non-crashing
+    # outcomes for an environment without the ML extra fully set up.
+    text = "This is a plain text message that should compress losslessly " * 3
+    result = router.compress(text, source_hint="text")
+    assert result is not None
+    assert result.compressed_token_count <= result.original_token_count
+
+
+def test_ml_compress_enabled_end_to_end_via_config():
+    """CompressConfig.ml_compress_enabled should reach the router without
+    crashing the top-level compress() call, deps present or not."""
+    messages = [
+        {"role": "user", "content": "Summarize this"},
+        {"role": "assistant", "content": "This is a fairly long plain-text response " * 5},
+    ]
+    config = CompressConfig(ml_compress_enabled=True, retention_threshold=0.5)
+    result = compress(messages, model="gpt-4o", config=config)
+    assert result.tokens_saved >= 0

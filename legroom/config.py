@@ -44,6 +44,13 @@ class CompressConfig:
     # JSON array groups that turn out to be too diverse to benefit from it.
     adaptive_sizing: bool = False
     size_bias: float = 1.0
+    # Opt-in ML token-retention compression (Kompress-v2-base) for plain-text
+    # content. Lossy and requires `pip install legroom[ml]` plus the model
+    # files (see README) — falls back to the lossless TextCompressor when
+    # the optional deps or model aren't available. Off by default.
+    ml_compress_enabled: bool = False
+    ml_model_path: str | None = None
+    ml_tokenizer_path: str | None = None
 
 
 @dataclass

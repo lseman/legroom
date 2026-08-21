@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import hashlib
+import logging
 from typing import Any, Optional
 from collections import OrderedDict
 
@@ -14,7 +15,10 @@ from .log_compressor import LogCompressor
 from .search_compressor import SearchCompressor
 from .code_compressor import CodeCompressor
 from .text_compressor import TextCompressor
+from .ml_compressor import MLTextCompressor
 from .tokenizer import count_tokens
+
+logger = logging.getLogger(__name__)
 
 
 class CompressionCache:
@@ -72,6 +76,11 @@ class ContentRouter:
         cache_size: int = 100,
         adaptive_sizing: bool = False,
         size_bias: float = 1.0,
+        ml_compress_enabled: bool = False,
+        ml_model_path: str | None = None,
+        ml_tokenizer_path: str | None = None,
+        ml_retention_threshold: float = 0.5,
+        ml_min_compression_ratio: float = 0.1,
     ) -> None:
         self._detector = ContentDetector()
         self._crusher = SmartCrusher(
@@ -86,6 +95,20 @@ class ContentRouter:
         self._code_compressor = CodeCompressor()
         self._text_compressor = TextCompressor()
         self._cache = CompressionCache(max_size=cache_size)
+
+        # Opt-in, best-effort: missing optional deps or model files just
+        # mean we fall back to the lossless TextCompressor for text content.
+        self._ml_compressor: Optional[MLTextCompressor] = None
+        if ml_compress_enabled:
+            try:
+                self._ml_compressor = MLTextCompressor(
+                    model_path=ml_model_path,
+                    tokenizer_path=ml_tokenizer_path,
+                    retention_threshold=ml_retention_threshold,
+                    min_compression_ratio=ml_min_compression_ratio,
+                )
+            except ImportError as e:
+                logger.warning(f"ML compression requested but unavailable: {e}")
 
     def compress(
         self,
@@ -126,7 +149,7 @@ class ContentRouter:
         elif content_type == "code":
             output = self._compress_code(content, source_hint, model)
         else:
-            output = self._text_compressor.compress(content, source_hint, model)
+            output = self._compress_text(content, source_hint, model)
 
         if output and not query_terms:
             self._cache.put(content_hash, output.compressed)
@@ -163,6 +186,18 @@ class ContentRouter:
     def _compress_code(self, content: str, source_hint: str, model: str) -> Optional[CompressOutput]:
         """Compress code content."""
         return self._code_compressor.compress(content, source_hint, model)
+
+    def _compress_text(self, content: str, source_hint: str, model: str) -> Optional[CompressOutput]:
+        """Compress plain text: lossless whitespace normalization, then
+        optional lossy ML token-retention scoring on top when enabled."""
+        output = self._text_compressor.compress(content, source_hint, model)
+        if self._ml_compressor is None:
+            return output
+
+        ml_output = self._ml_compressor.compress(output.compressed, source_hint, model)
+        if ml_output.strategy == "ml_compressor" and ml_output.compressed_token_count < output.compressed_token_count:
+            return ml_output
+        return output
 
     def get_stats(self) -> dict[str, Any]:
         """Return compression statistics."""

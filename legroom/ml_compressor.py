@@ -23,7 +23,13 @@ class MLTextCompressor:
     by importance and drops low-score tokens, reconstructing text.
     """
 
-    def __init__(self, model_path: str | None = None, tokenizer_path: str | None = None) -> None:
+    def __init__(
+        self,
+        model_path: str | None = None,
+        tokenizer_path: str | None = None,
+        retention_threshold: float = 0.5,
+        min_compression_ratio: float = 0.1,
+    ) -> None:
         if not _HAS_ML:
             raise ImportError(
                 "ML features require onnxruntime, numpy, and tokenizers. "
@@ -35,8 +41,8 @@ class MLTextCompressor:
 
         self._session: Optional[ort.InferenceSession] = None
         self._tokenizer: Optional[HfTokenizer] = None
-        self._retention_threshold: float = 0.5
-        self._min_compression_ratio: float = 0.1
+        self._retention_threshold = retention_threshold
+        self._min_compression_ratio = min_compression_ratio
 
         self._load_model()
 
