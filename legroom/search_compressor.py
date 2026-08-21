@@ -6,19 +6,22 @@ import re
 from collections import defaultdict
 
 from .compressor_registry import CompressInput, CompressOutput
+from .tokenizer import count_tokens
 
 
 class SearchCompressor:
     """Compresses search results by grouping by file."""
 
-    def compress(self, content: str, source_hint: str = "search") -> CompressOutput:
+    def compress(
+        self, content: str, source_hint: str = "search", model: str = "gpt-4o"
+    ) -> CompressOutput:
         """Compress search result content."""
         lines = content.split("\n")
         if len(lines) < 5:
             return CompressOutput(
                 compressed=content,
-                original_token_count=len(content) // 4,
-                compressed_token_count=len(content) // 4,
+                original_token_count=count_tokens(content, model),
+                compressed_token_count=count_tokens(content, model),
                 strategy="search_compressor",
             )
 
@@ -32,8 +35,8 @@ class SearchCompressor:
         if len(files) <= 1:
             return CompressOutput(
                 compressed=content,
-                original_token_count=len(content) // 4,
-                compressed_token_count=len(content) // 4,
+                original_token_count=count_tokens(content, model),
+                compressed_token_count=count_tokens(content, model),
                 strategy="search_compressor",
             )
 
@@ -45,8 +48,8 @@ class SearchCompressor:
                 result.append(f"  {line_num}: {line_content}")
 
         compressed = "\n".join(result)
-        tokens_before = len(content) // 4
-        tokens_after = len(compressed) // 4
+        tokens_before = count_tokens(content, model)
+        tokens_after = count_tokens(compressed, model)
 
         return CompressOutput(
             compressed=compressed,

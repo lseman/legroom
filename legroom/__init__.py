@@ -16,6 +16,7 @@ from .cross_turn_dedup import DedupBlock, dedup_blocks
 from .recursive_json import route_embedded_json
 from .lossless_compaction import compact_lossless, LosslessResult
 from .adaptive_sizer import compute_optimal_k, count_unique_simhash
+from .query_relevance import extract_query_terms, query_relevance, latest_query_terms
 from .read_lifecycle import (
     ReadLifecycleConfig,
     ReadLifecycleResult,
@@ -33,6 +34,11 @@ from .compress import compress, CompressResult as CliCompressResult
 from .ccr.compression_store import CompressionStore
 from .ccr.marker_resolution import parse_markers, resolve_marker, create_resolution_prompt
 from .ccr.tool_injection import CCRToolInjector, create_ccr_tool_definition, create_system_instructions
+
+# Proxy and dashboard
+from .proxy_server import LegroomProxy
+from .proxy_state import ProxyState, RequestEvent
+from .proxy_dashboard import get_dashboard_html
 
 __all__ = [
     "__version__",
@@ -59,6 +65,9 @@ __all__ = [
     "LosslessResult",
     "compute_optimal_k",
     "count_unique_simhash",
+    "extract_query_terms",
+    "query_relevance",
+    "latest_query_terms",
     "ReadLifecycleConfig",
     "ReadLifecycleResult",
     "ReadState",
@@ -74,4 +83,8 @@ __all__ = [
     "CCRToolInjector",
     "create_ccr_tool_definition",
     "create_system_instructions",
+    "LegroomProxy",
+    "ProxyState",
+    "RequestEvent",
+    "get_dashboard_html",
 ]

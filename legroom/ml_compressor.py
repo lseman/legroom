@@ -6,6 +6,7 @@ import json
 from typing import Any, Optional
 
 from .compressor_registry import CompressInput, CompressOutput
+from .tokenizer import count_tokens
 
 try:
     import onnxruntime as ort
@@ -51,14 +52,16 @@ class MLTextCompressor:
             self._session = None
             self._tokenizer = None
 
-    def compress(self, content: str, source_hint: str = "ml") -> CompressOutput:
+    def compress(
+        self, content: str, source_hint: str = "ml", model: str = "gpt-4o"
+    ) -> CompressOutput:
         """Compress text using ML retention scoring."""
         if not _HAS_ML or self._session is None or self._tokenizer is None:
             # Fallback to basic compression
             return CompressOutput(
                 compressed=content,
-                original_token_count=len(content) // 4,
-                compressed_token_count=len(content) // 4,
+                original_token_count=count_tokens(content, model),
+                compressed_token_count=count_tokens(content, model),
                 strategy="ml_compressor_fallback",
             )
 
@@ -70,8 +73,8 @@ class MLTextCompressor:
         if not tokens:
             return CompressOutput(
                 compressed=content,
-                original_token_count=len(content) // 4,
-                compressed_token_count=len(content) // 4,
+                original_token_count=count_tokens(content, model),
+                compressed_token_count=count_tokens(content, model),
                 strategy="ml_compressor_empty",
             )
 
@@ -111,8 +114,8 @@ class MLTextCompressor:
 
                 # Decode
                 compressed = self._tokenizer.decode(kept_tokens, skip_special_tokens=True)
-                tokens_before = len(content) // 4
-                tokens_after = len(compressed) // 4
+                tokens_before = count_tokens(content, model)
+                tokens_after = count_tokens(compressed, model)
 
                 return CompressOutput(
                     compressed=compressed,
@@ -127,7 +130,7 @@ class MLTextCompressor:
         # Fallback
         return CompressOutput(
             compressed=content,
-            original_token_count=len(content) // 4,
-            compressed_token_count=len(content) // 4,
+            original_token_count=count_tokens(content, model),
+            compressed_token_count=count_tokens(content, model),
             strategy="ml_compressor_fallback",
         )

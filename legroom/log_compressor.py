@@ -6,6 +6,7 @@ import re
 from collections import Counter
 
 from .compressor_registry import CompressInput, CompressOutput
+from .tokenizer import count_tokens
 
 
 class LogCompressor:
@@ -14,14 +15,16 @@ class LogCompressor:
     def __init__(self, max_repeats: int = 5) -> None:
         self.max_repeats = max_repeats
 
-    def compress(self, content: str, source_hint: str = "log") -> CompressOutput:
+    def compress(
+        self, content: str, source_hint: str = "log", model: str = "gpt-4o"
+    ) -> CompressOutput:
         """Compress log content."""
         lines = content.split("\n")
         if len(lines) < 10:
             return CompressOutput(
                 compressed=content,
-                original_token_count=len(content) // 4,
-                compressed_token_count=len(content) // 4,
+                original_token_count=count_tokens(content, model),
+                compressed_token_count=count_tokens(content, model),
                 strategy="log_compressor",
             )
 
@@ -32,8 +35,8 @@ class LogCompressor:
         if not repeated:
             return CompressOutput(
                 compressed=content,
-                original_token_count=len(content) // 4,
-                compressed_token_count=len(content) // 4,
+                original_token_count=count_tokens(content, model),
+                compressed_token_count=count_tokens(content, model),
                 strategy="log_compressor",
             )
 
@@ -64,8 +67,8 @@ class LogCompressor:
                 result_lines.append(line)
 
         compressed = "\n".join(result_lines)
-        tokens_before = len(content) // 4
-        tokens_after = len(compressed) // 4
+        tokens_before = count_tokens(content, model)
+        tokens_after = count_tokens(compressed, model)
 
         return CompressOutput(
             compressed=compressed,

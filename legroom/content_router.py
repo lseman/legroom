@@ -7,12 +7,14 @@ import hashlib
 from typing import Any, Optional
 from collections import OrderedDict
 
+from .compressor_registry import CompressOutput
 from .content_detector import ContentDetector
 from .smart_crusher import SmartCrusher, SmartCrusherConfig
 from .log_compressor import LogCompressor
 from .search_compressor import SearchCompressor
 from .code_compressor import CodeCompressor
 from .text_compressor import TextCompressor
+from .tokenizer import count_tokens
 
 
 class CompressionCache:
@@ -73,65 +75,82 @@ class ContentRouter:
         self._text_compressor = TextCompressor()
         self._cache = CompressionCache(max_size=cache_size)
 
-    def compress(self, content: str, source_hint: str = "unknown") -> Optional[CompressOutput]:
-        """Compress content, routing to the best compressor."""
-        # Check cache
+    def compress(
+        self,
+        content: str,
+        source_hint: str = "unknown",
+        model: str = "gpt-4o",
+        query_terms: set[str] | None = None,
+    ) -> Optional[CompressOutput]:
+        """Compress content, routing to the best compressor.
+
+        ``query_terms`` biases JSON array compression toward items relevant
+        to the current turn (see :mod:`legroom.query_relevance`). When set,
+        the compression cache is bypassed for JSON content since a cached
+        result from a different query wouldn't reflect the current bias.
+        """
+        # Check cache — skipped for query-aware compression, since a cached
+        # result may have been produced (or would be reused) under a
+        # different query's relevance bias.
         content_hash = hashlib.sha256(content.encode()).hexdigest()[:16]
-        cached = self._cache.get(content_hash)
-        if cached:
-            return CompressOutput(
-                compressed=cached,
-                original_token_count=len(content) // 4,
-                compressed_token_count=len(cached) // 4,
-                strategy=f"cached:{source_hint}",
-            )
+        if not query_terms:
+            cached = self._cache.get(content_hash)
+            if cached:
+                return CompressOutput(
+                    compressed=cached,
+                    original_token_count=count_tokens(content, model),
+                    compressed_token_count=count_tokens(cached, model),
+                    strategy=f"cached:{source_hint}",
+                )
 
         content_type = self._detector.detect(content)
 
         if content_type == "json":
-            output = self._compress_json(content, source_hint)
+            output = self._compress_json(content, source_hint, model, query_terms)
         elif content_type == "log":
-            output = self._compress_log(content, source_hint)
+            output = self._compress_log(content, source_hint, model)
         elif content_type == "search":
-            output = self._compress_search(content, source_hint)
+            output = self._compress_search(content, source_hint, model)
         elif content_type == "code":
-            output = self._compress_code(content, source_hint)
+            output = self._compress_code(content, source_hint, model)
         else:
-            output = self._text_compressor.compress(content, source_hint)
+            output = self._text_compressor.compress(content, source_hint, model)
 
-        if output:
+        if output and not query_terms:
             self._cache.put(content_hash, output.compressed)
 
         return output
 
-    def _compress_json(self, content: str, source_hint: str) -> Optional[CompressOutput]:
+    def _compress_json(
+        self, content: str, source_hint: str, model: str, query_terms: set[str] | None = None
+    ) -> Optional[CompressOutput]:
         """Compress JSON content using SmartCrusher."""
         try:
             data = json.loads(content)
             if isinstance(data, list) and len(data) > 5:
-                output = self._crusher.compress(content, source_hint)
+                output = self._crusher.compress(content, source_hint, model, query_terms)
                 if output:
                     return CompressOutput(
                         compressed=output.compressed,
-                        original_token_count=len(content) // 4,
-                        compressed_token_count=len(output.compressed) // 4,
+                        original_token_count=output.original_token_count,
+                        compressed_token_count=output.compressed_token_count,
                         strategy="smart_crusher",
                     )
         except (json.JSONDecodeError, ValueError):
             pass
         return None
 
-    def _compress_log(self, content: str, source_hint: str) -> Optional[CompressOutput]:
+    def _compress_log(self, content: str, source_hint: str, model: str) -> Optional[CompressOutput]:
         """Compress log content."""
-        return self._log_compressor.compress(content, source_hint)
+        return self._log_compressor.compress(content, source_hint, model)
 
-    def _compress_search(self, content: str, source_hint: str) -> Optional[CompressOutput]:
+    def _compress_search(self, content: str, source_hint: str, model: str) -> Optional[CompressOutput]:
         """Compress search results."""
-        return self._search_compressor.compress(content, source_hint)
+        return self._search_compressor.compress(content, source_hint, model)
 
-    def _compress_code(self, content: str, source_hint: str) -> Optional[CompressOutput]:
+    def _compress_code(self, content: str, source_hint: str, model: str) -> Optional[CompressOutput]:
         """Compress code content."""
-        return self._code_compressor.compress(content, source_hint)
+        return self._code_compressor.compress(content, source_hint, model)
 
     def get_stats(self) -> dict[str, Any]:
         """Return compression statistics."""

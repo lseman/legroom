@@ -1,40 +1,39 @@
-"""CLI interface for legroom."""
+"""CLI interface for legroom — compression proxy and dashboard."""
 
 from __future__ import annotations
 
 import argparse
 import json
 import sys
-
-from .compress import compress
-from .config import CompressConfig
+from typing import Optional
 
 
-def main() -> None:
-    """Main CLI entry point."""
-    parser = argparse.ArgumentParser(description="Compress LLM context")
-    parser.add_argument("input", nargs="?", default="-", help="Input file (default: stdin)")
-    parser.add_argument("-o", "--output", default="-", help="Output file (default: stdout)")
-    parser.add_argument("--model", default="gpt-4o", help="Model for token counting")
-    parser.add_argument("--protect-recent", type=int, default=0, help="Number of recent messages to protect")
-    parser.add_argument("--no-optimize", action="store_true", help="Disable compression")
-    parser.add_argument("--no-ccr", action="store_true", help="Disable CCR injection")
-    args = parser.parse_args()
+def compress_stdin(
+    model: str = "gpt-4o",
+    output_file: str = "-",
+    protect_recent: int = 0,
+    no_optimize: bool = False,
+    no_ccr: bool = False,
+) -> None:
+    """Compress messages from stdin (or file) and output result."""
+    from .compress import compress
+    from .config import CompressConfig
 
-    # Read input
-    input_text = sys.stdin.read() if args.input == "-" else open(args.input).read()
-    messages = json.loads(input_text)
+    input_text = sys.stdin.read() if True else open("input.json").read()
+    try:
+        messages = json.loads(input_text)
+    except json.JSONDecodeError as e:
+        print(f"Error: Invalid JSON input: {e}", file=sys.stderr)
+        sys.exit(1)
 
-    # Compress
     config = CompressConfig(
-        optimize=not args.no_optimize,
-        ccr_enabled=not args.no_ccr,
-        protect_recent=args.protect_recent,
+        optimize=not no_optimize,
+        ccr_enabled=not no_ccr,
+        protect_recent=protect_recent,
     )
 
-    result = compress(messages, model=args.model, config=config)
+    result = compress(messages, model=model, config=config)
 
-    # Output
     output = {
         "messages": result.messages,
         "tokens_before": result.tokens_before,
@@ -45,11 +44,95 @@ def main() -> None:
     }
 
     output_text = json.dumps(output, indent=2)
-    if args.output == "-":
-        print(output_text)
+    print(output_text)
+
+
+def run_proxy(
+    host: str = "0.0.0.0",
+    port: int = 8888,
+    target: str = "https://api.openai.com/v1/chat/completions",
+    api_key: Optional[str] = None,
+    compress_context: bool = True,
+) -> None:
+    """Start the FastAPI proxy server with dashboard."""
+    import uvicorn
+
+    from .proxy_server import LegroomProxy
+
+    proxy = LegroomProxy(
+        target_url=target,
+        api_key=api_key,
+        compress_context=compress_context,
+    )
+
+    key_display = "(set via --api-key or OPENAI_API_KEY)" if proxy.api_key else "(not set — requests will fail)"
+    print(f"Starting Legroom proxy on http://{host}:{port}")
+    print(f"Dashboard: http://{host}:{port}/")
+    print(f"Forwarding to: {target}")
+    print(f"API key: {key_display}")
+    print("Press Ctrl+C to stop")
+
+    uvicorn.run(
+        proxy.app,
+        host=host,
+        port=port,
+        log_level="info",
+    )
+
+
+def main() -> None:
+    """Main CLI entry point."""
+    parser = argparse.ArgumentParser(
+        description="Legroom — Context compression proxy",
+        prog="legroom",
+    )
+    subparsers = parser.add_subparsers(dest="command", help="Available commands")
+
+    # Compress command (default)
+    compress_parser = subparsers.add_parser("compress", help="Compress messages from stdin")
+    compress_parser.add_argument("input", nargs="?", default="-", help="Input file (default: stdin)")
+    compress_parser.add_argument("-o", "--output", default="-", help="Output file (default: stdout)")
+    compress_parser.add_argument("--model", default="gpt-4o", help="Model for token counting")
+    compress_parser.add_argument("--protect-recent", type=int, default=0, help="Number of recent messages to protect")
+    compress_parser.add_argument("--no-optimize", action="store_true", help="Disable compression")
+    compress_parser.add_argument("--no-ccr", action="store_true", help="Disable CCR injection")
+
+    # Proxy command
+    proxy_parser = subparsers.add_parser("proxy", help="Start the FastAPI proxy server with dashboard")
+    proxy_parser.add_argument("--host", default="0.0.0.0", help="Host to bind (default: 0.0.0.0)")
+    proxy_parser.add_argument("--port", type=int, default=8888, help="Port to bind (default: 8888)")
+    proxy_parser.add_argument("--target", default=None, help="Target LLM API URL (default: http://127.0.0.1:8080/v1/chat/completions or env LEGROOM_TARGET_URL)")
+    proxy_parser.add_argument("--api-key", default=None, help="API key for target service (or use OPENAI_API_KEY env var)")
+    proxy_parser.add_argument("--no-compress", action="store_true", help="Disable context compression")
+
+    args = parser.parse_args()
+
+    if args.command == "proxy" or (not args.command and "--host" in sys.argv):
+        run_proxy(
+            host=args.host,
+            port=args.port,
+            target=args.target,
+            api_key=args.api_key,
+            compress_context=not getattr(args, "no_compress", False),
+        )
     else:
-        with open(args.output, "w") as f:
-            f.write(output_text)
+        # Default: compress mode (for backwards compatibility)
+        if not args.command:
+            # No subcommand given, try to detect if this is proxy mode
+            if any(arg.startswith("--") for arg in sys.argv[1:]):
+                # Has flags but no command — might be proxy mode
+                args.command = "proxy"
+            else:
+                args.command = "compress"
+
+        if args.command == "compress":
+            compress_stdin(
+                model=args.model,
+                output_file=args.output,
+                protect_recent=args.protect_recent,
+                no_optimize=args.no_optimize,
+                no_ccr=args.no_ccr,
+            )
 
 
 if __name__ == "__main__":

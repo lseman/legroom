@@ -46,31 +46,56 @@ def compute_optimal_k(
     return max(min_k, min(k, len(items)))
 
 
+_SIMHASH_BITS = 64
+
+
+def _simhash(text: str) -> int:
+    """Compute a 64-bit SimHash fingerprint over word shingles.
+
+    Each shingle is hashed to 64 bits; the fingerprint bit at position i
+    is set if more shingles have bit i = 1 than = 0 (weighted majority vote).
+    Near-duplicate texts produce fingerprints with small Hamming distance.
+    """
+    words = text.lower().split()
+    shingles = [" ".join(words[i : i + 2]) for i in range(len(words) - 1)] or words
+    if not shingles:
+        return 0
+
+    bit_votes = [0] * _SIMHASH_BITS
+    for shingle in shingles:
+        h = int.from_bytes(hashlib.sha256(shingle.encode()).digest()[:8], "big")
+        for bit in range(_SIMHASH_BITS):
+            if h & (1 << bit):
+                bit_votes[bit] += 1
+            else:
+                bit_votes[bit] -= 1
+
+    fingerprint = 0
+    for bit, vote in enumerate(bit_votes):
+        if vote > 0:
+            fingerprint |= 1 << bit
+    return fingerprint
+
+
+def _hamming_distance(a: int, b: int) -> int:
+    return bin(a ^ b).count("1")
+
+
 def count_unique_simhash(items: list[str], threshold: int = 10) -> int:
     """Count unique items using simhash-based near-duplicate detection.
 
-    Items with simhash distance <= threshold are considered duplicates.
+    Items with simhash Hamming distance <= threshold are considered duplicates.
     """
     if not items:
         return 0
 
-    # Compute simple hash-based grouping
-    seen: set[str] = set()
+    fingerprints: list[int] = []
     unique = 0
 
     for item in items:
-        h = hashlib.sha256(item.encode()).hexdigest()[:16]
-        # Check for near-duplicates via hash prefix similarity
-        found = False
-        for seen_hash in seen:
-            # Count matching prefix characters
-            match = sum(1 for a, b in zip(h, seen_hash) if a == b)
-            if match >= len(h) - 2:
-                found = True
-                break
-
-        if not found:
-            seen.add(h)
+        fp = _simhash(item)
+        if not any(_hamming_distance(fp, seen_fp) <= threshold for seen_fp in fingerprints):
+            fingerprints.append(fp)
             unique += 1
 
     return unique

@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import hashlib
 import logging
+from collections import OrderedDict
 from typing import Any
 
 from .config import CompressConfig, CompressResult
 from .tokenizer import count_tokens_messages
-from .content_router import ContentRouter, CompressionCache
+from .compressor_registry import _compute_salience
+from .content_router import ContentRouter
 from .smart_crusher import SmartCrusher, SmartCrusherConfig
 from .adaptive_sizer import compute_optimal_k
 from .cross_turn_dedup import DedupBlock, dedup_blocks
@@ -16,41 +19,118 @@ from .lossless_compaction import compact_lossless
 from .read_lifecycle import classify_reads, ReadLifecycleConfig, ReadLifecycleResult
 from .output.shaper import OutputShaper
 from .ccr.tool_injection import CCRToolInjector
+from .query_relevance import latest_query_terms
 
 logger = logging.getLogger(__name__)
+
+
+class ContentHashCache:
+    """LRU cache keyed by content hash → compressed result.
+
+    Used by CompressPhase to avoid re-compressing identical content
+    across messages and across pipeline invocations.
+    """
+
+    def __init__(self, maxsize: int = 512) -> None:
+        self._cache: OrderedDict[str, str] = OrderedDict()
+        self._maxsize = maxsize
+        self._hits = 0
+        self._misses = 0
+
+    def get(self, content: str) -> str | None:
+        h = hashlib.sha256(content.encode()).hexdigest()
+        if h in self._cache:
+            self._cache.move_to_end(h)
+            self._hits += 1
+            return self._cache[h]
+        self._misses += 1
+        return None
+
+    def put(self, content: str, compressed: str) -> None:
+        h = hashlib.sha256(content.encode()).hexdigest()
+        if h in self._cache:
+            self._cache.move_to_end(h)
+            self._cache[h] = compressed
+        else:
+            if len(self._cache) >= self._maxsize:
+                self._cache.popitem(last=False)
+            self._cache[h] = compressed
+
+    @property
+    def hits(self) -> int:
+        return self._hits
+
+    @property
+    def misses(self) -> int:
+        return self._misses
+
+    @property
+    def ratio(self) -> float:
+        total = self._hits + self._misses
+        if total == 0:
+            return 0.0
+        return self._hits / total
+
+    @property
+    def size(self) -> int:
+        return len(self._cache)
+
+    def clear(self) -> None:
+        self._cache.clear()
 
 
 class CompressPhase:
     """Phase that applies content compression."""
 
-    def __init__(self) -> None:
+    def __init__(self, cache: ContentHashCache | None = None) -> None:
         self._router = ContentRouter()
+        self._cache = cache or ContentHashCache()
 
     def apply(
-        self, messages: list[dict[str, Any]], config: CompressConfig
+        self, messages: list[dict[str, Any]], config: CompressConfig, model: str = "gpt-4o"
     ) -> list[dict[str, Any]]:
-        """Apply compression to messages."""
+        """Apply compression to messages with cache lookups."""
+        query_terms = latest_query_terms(messages) if getattr(config, "query_aware", True) else set()
+
         result = []
         for msg in messages:
             content = msg.get("content", "")
             if isinstance(content, str) and content.strip():
+                # Check compression cache (before lossless, on raw content).
+                # Skipped under query-aware compression — see ContentRouter.compress.
+                if not query_terms:
+                    cached = self._cache.get(content)
+                    if cached is not None:
+                        result.append({**msg, "content": cached})
+                        continue
+
+                original_content = content
+
                 # Try lossless compaction first
                 compacted = compact_lossless(content, "text")
                 if compacted.transforms_applied:
                     content = compacted.compressed
 
-                # Route through content router
-                compressed = self._router.compress(content)
+                # Route through content router with model
+                compressed = self._router.compress(
+                    content, source_hint="text", model=model, query_terms=query_terms
+                )
                 if compressed and compressed.tokens_saved > 0:
                     content = compressed.compressed
 
                 # Try recursive JSON routing
                 json_result = route_embedded_json(
                     content,
-                    lambda span: self._router.compress(span),
+                    lambda span: self._router.compress(
+                        span, source_hint="text", model=model, query_terms=query_terms
+                    ),
                 )
                 if json_result is not None:
                     content = json_result
+
+                # Cache the result keyed by the original raw content
+                if content != original_content and not query_terms:
+                    self._cache.put(original_content, content)
 
             result.append({**msg, "content": content})
         return result
@@ -138,6 +218,14 @@ class TransformPipeline:
 
         tokens_before = count_tokens_messages(messages, model)
         config = config or CompressConfig()
+
+        # Compute salience scores before compression
+        if getattr(config, "track_salience", True):
+            salience_scores_before = [
+                _compute_salience(msg.get("content", "")) for msg in messages
+            ]
+        else:
+            salience_scores_before = None
         self._applied_transforms = []
         self._warnings = []
 
@@ -201,7 +289,7 @@ class TransformPipeline:
         # Phase 3: Compression
         if self.compress_enabled:
             try:
-                current_messages = self.compressor.apply(current_messages, config)
+                current_messages = self.compressor.apply(current_messages, config, model=model)
                 self._applied_transforms.append("compress")
             except Exception as e:
                 logger.warning(f"Compress phase failed: {e}")
@@ -225,6 +313,9 @@ class TransformPipeline:
 
         tokens_after = count_tokens_messages(current_messages, model)
 
+        # Inflation guard: if the pipeline made things worse, revert to the
+        # original messages rather than ship an inflated result. Independent
+        # of salience tracking, which is purely for the metadata below.
         if tokens_after > tokens_before:
             logger.warning("Compression inflated tokens; reverting to original")
             return TransformResult(
@@ -233,7 +324,25 @@ class TransformPipeline:
                 tokens_after=tokens_before,
                 transforms_applied=["inflation_guard"],
                 warnings=self._warnings,
+                metadata={
+                    "cache_metrics": self.cache_aligner.get_metrics(),
+                    "salience_scores_before": salience_scores_before,
+                },
             )
+
+        # Compute salience scores after compression
+        if getattr(config, "track_salience", True):
+            salience_scores_after = [
+                _compute_salience(msg.get("content", "")) for msg in current_messages
+            ]
+        else:
+            salience_scores_after = None
+
+        metadata = {"cache_metrics": self.cache_aligner.get_metrics()}
+        if salience_scores_before is not None:
+            metadata["salience_scores_before"] = salience_scores_before
+        if salience_scores_after is not None:
+            metadata["salience_scores_after"] = salience_scores_after
 
         return TransformResult(
             messages=current_messages,
@@ -241,7 +350,7 @@ class TransformPipeline:
             tokens_after=tokens_after,
             transforms_applied=self._applied_transforms,
             warnings=self._warnings,
-            metadata={"cache_metrics": self.cache_aligner.get_metrics()},
+            metadata=metadata,
         )
 
 

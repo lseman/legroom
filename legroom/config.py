@@ -35,6 +35,11 @@ class CompressConfig:
     maturation_enabled: bool = False
     maturation_quiesce_turns: int = 5
     maturation_max_hold_turns: int = 50
+    # Salience tracking
+    track_salience: bool = True
+    # Bias JSON array compression toward items relevant to the latest
+    # user message instead of compressing purely on structural redundancy.
+    query_aware: bool = True
 
 
 @dataclass
@@ -48,3 +53,28 @@ class CompressResult:
     transforms_applied: list[str]
     warnings: list[str] = field(default_factory=list)
     metadata: dict[str, Any] = field(default_factory=dict)
+
+    @property
+    def avg_salience_before(self) -> float | None:
+        """Average message salience before compression."""
+        scores = self.metadata.get("salience_scores_before")
+        if not scores:
+            return None
+        return sum(scores) / len(scores)
+
+    @property
+    def avg_salience_after(self) -> float | None:
+        """Average message salience after compression."""
+        scores = self.metadata.get("salience_scores_after")
+        if not scores:
+            return None
+        return sum(scores) / len(scores)
+
+    @property
+    def information_preserved(self) -> float | None:
+        """Ratio of information preserved (salience_after / salience_before)."""
+        before = self.avg_salience_before
+        after = self.avg_salience_after
+        if before is None or after is None:
+            return None
+        return round(after / max(before, 0.001), 4)

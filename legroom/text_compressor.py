@@ -5,12 +5,15 @@ from __future__ import annotations
 import re
 
 from .compressor_registry import CompressInput, CompressOutput
+from .tokenizer import count_tokens
 
 
 class TextCompressor:
     """Basic text compression via whitespace and repetition normalization."""
 
-    def compress(self, content: str, source_hint: str = "text") -> CompressOutput:
+    def compress(
+        self, content: str, source_hint: str = "text", model: str = "gpt-4o"
+    ) -> CompressOutput:
         """Compress text content."""
         # Collapse multiple spaces
         collapsed = re.sub(r"[ \t]+", " ", content)
@@ -24,8 +27,8 @@ class TextCompressor:
         # Strip leading/trailing whitespace
         collapsed = collapsed.strip()
 
-        tokens_before = len(content) // 4
-        tokens_after = len(collapsed) // 4
+        tokens_before = count_tokens(content, model)
+        tokens_after = count_tokens(collapsed, model)
 
         return CompressOutput(
             compressed=collapsed,
