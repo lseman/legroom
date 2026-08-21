@@ -40,6 +40,10 @@ class CompressConfig:
     # Bias JSON array compression toward items relevant to the latest
     # user message instead of compressing purely on structural redundancy.
     query_aware: bool = True
+    # Use compute_optimal_k (SimHash near-dup + Kneedle) to skip summarizing
+    # JSON array groups that turn out to be too diverse to benefit from it.
+    adaptive_sizing: bool = False
+    size_bias: float = 1.0
 
 
 @dataclass

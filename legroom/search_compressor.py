@@ -2,15 +2,23 @@
 
 from __future__ import annotations
 
+import os
 import re
 from collections import defaultdict
+from typing import Iterable
 
 from .compressor_registry import CompressInput, CompressOutput
 from .tokenizer import count_tokens
 
+# Below this, factoring out a shared prefix costs more (the "# common: ..."
+# heading) than it saves across the group.
+MIN_PREFIX_CHARS = 8
+
 
 class SearchCompressor:
-    """Compresses search results by grouping by file."""
+    """Compresses search results by grouping by file and factoring out
+    content patterns shared across a file's matches (e.g. every match
+    being a call to the same function)."""
 
     def compress(
         self, content: str, source_hint: str = "search", model: str = "gpt-4o"
@@ -40,12 +48,21 @@ class SearchCompressor:
                 strategy="search_compressor",
             )
 
-        # Rebuild with file headings
+        # Rebuild with file headings, factoring out a common leading
+        # substring per file group when most of its matches share one
+        # (e.g. repeated calls to the same function/constructor).
         result = []
         for filepath, matches in files.items():
             result.append(filepath)
-            for line_num, line_content in sorted(matches):
-                result.append(f"  {line_num}: {line_content}")
+            ordered = sorted(matches)
+            prefix = self._common_prefix(line_content for _, line_content in ordered)
+            if prefix:
+                result.append(f"  # common: {prefix}\N{HORIZONTAL ELLIPSIS}")
+                for line_num, line_content in ordered:
+                    result.append(f"  {line_num}: \N{HORIZONTAL ELLIPSIS}{line_content[len(prefix):]}")
+            else:
+                for line_num, line_content in ordered:
+                    result.append(f"  {line_num}: {line_content}")
 
         compressed = "\n".join(result)
         tokens_before = count_tokens(content, model)
@@ -57,3 +74,22 @@ class SearchCompressor:
             compressed_token_count=tokens_after,
             strategy="search_compressor",
         )
+
+    def _common_prefix(self, lines: Iterable[str]) -> str:
+        """Find a shared leading substring across a file's matched lines,
+        cut back to a word boundary. Returns "" if there are too few lines,
+        the prefix is too short, or the lines don't actually share much.
+        """
+        lines = list(lines)
+        if len(lines) < 3:
+            return ""
+
+        prefix = os.path.commonprefix(lines)
+        # Cut back to the last full "word" so we don't split an identifier
+        # or a call's opening paren mid-token.
+        match = re.match(r".*[\s(\[{,]", prefix)
+        prefix = match.group(0) if match else ""
+
+        if len(prefix) < MIN_PREFIX_CHARS:
+            return ""
+        return prefix

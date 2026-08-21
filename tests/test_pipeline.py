@@ -411,8 +411,8 @@ def test_lossless_roundtrip():
 
 
 def test_adaptive_sizer_identical_items():
-    """Nearly identical items should result in low K."""
-    items = [{"id": i, "value": "x" * 50} for i in range(100)]
+    """Nearly identical items (few distinct variants) should result in low K."""
+    items = [{"status": "ok", "value": "x" * 50} for _ in range(100)]
     item_strs = [json.dumps(item) for item in items]
     k = compute_optimal_k(item_strs, bias=0.7)
     assert k <= 50

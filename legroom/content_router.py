@@ -66,9 +66,21 @@ class CompressOutput:
 class ContentRouter:
     """Routes content to the best compressor based on type detection."""
 
-    def __init__(self, max_items: int = 50, cache_size: int = 100) -> None:
+    def __init__(
+        self,
+        max_items: int = 50,
+        cache_size: int = 100,
+        adaptive_sizing: bool = False,
+        size_bias: float = 1.0,
+    ) -> None:
         self._detector = ContentDetector()
-        self._crusher = SmartCrusher(SmartCrusherConfig(max_items=max_items))
+        self._crusher = SmartCrusher(
+            SmartCrusherConfig(
+                max_items=max_items,
+                adaptive_sizing=adaptive_sizing,
+                size_bias=size_bias,
+            )
+        )
         self._log_compressor = LogCompressor()
         self._search_compressor = SearchCompressor()
         self._code_compressor = CodeCompressor()

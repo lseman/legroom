@@ -128,13 +128,19 @@ def _compute_bigram_coverage(items: list[str]) -> list[tuple[int, float]]:
 
 
 def _find_knee(coverage: list[tuple[int, float]]) -> int:
-    """Find the knee point in a coverage curve."""
+    """Find the knee point in a coverage curve.
+
+    When the curve never bows above the diagonal — i.e. items are diverse
+    enough that there's no natural elbow — that itself means "no good
+    compression point," so the fallback is to keep everything rather than
+    collapsing to the initial candidate of 1.
+    """
     if not coverage:
         return 1
 
     # Calculate the elbow using the maximum distance from the diagonal
     max_dist = 0
-    knee_k = 1
+    knee_k = None
 
     for i, (k, coverage_pct) in enumerate(coverage):
         # Distance from the ideal diagonal (45 degree line)
@@ -145,4 +151,6 @@ def _find_knee(coverage: list[tuple[int, float]]) -> int:
             max_dist = dist
             knee_k = k
 
+    if knee_k is None:
+        return len(coverage)
     return max(1, knee_k)

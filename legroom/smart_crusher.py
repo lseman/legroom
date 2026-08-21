@@ -8,6 +8,7 @@ from dataclasses import dataclass, field
 from typing import Any
 from collections import defaultdict
 
+from .adaptive_sizer import compute_optimal_k
 from .compressor_registry import CompressInput, CompressOutput
 from .query_relevance import query_relevance
 from .tokenizer import count_tokens
@@ -62,7 +63,7 @@ class SmartCrusher:
             data = json.loads(content)
             if isinstance(data, list):
                 data = self._crush_array(data, {}, query_terms or set())
-                compressed = json.dumps(data, indent=2)
+                compressed = json.dumps(data, separators=(",", ":"))
                 tokens_before = count_tokens(content, model)
                 tokens_after = count_tokens(compressed, model)
                 return CompressOutput(
@@ -110,10 +111,24 @@ class SmartCrusher:
 
         result = []
         for group in groups:
-            if len(group) >= self.config.min_group_size:
-                result.append(self._summarize_group(group))
-            else:
+            if len(group) < self.config.min_group_size:
                 result.extend(group)
+                continue
+
+            if self.config.adaptive_sizing:
+                # Let compute_optimal_k gauge how many items in this group
+                # are genuinely distinct (via SimHash near-dup detection +
+                # Kneedle knee-finding). A summary is only worth its fixed
+                # overhead when the group collapses to well under its size;
+                # otherwise the items are diverse enough that summarizing
+                # would just throw away information for little savings.
+                serialized = [json.dumps(item, sort_keys=True) for item in group]
+                k = compute_optimal_k(serialized, bias=self.config.size_bias)
+                if k >= len(group) * 0.75:
+                    result.extend(group)
+                    continue
+
+            result.append(self._summarize_group(group))
 
         result.extend(relevant)
         result.extend(recent)

@@ -41,6 +41,8 @@ def compress(
         ccr_enabled=cfg.ccr_enabled,
         output_shaping=cfg.output_shaping,
         verbosity_level=cfg.verbosity_level,
+        adaptive_sizing=cfg.adaptive_sizing,
+        size_bias=cfg.size_bias,
     )
 
     result = pipeline.apply(messages, model=model, config=cfg)

@@ -82,8 +82,13 @@ class ContentHashCache:
 class CompressPhase:
     """Phase that applies content compression."""
 
-    def __init__(self, cache: ContentHashCache | None = None) -> None:
-        self._router = ContentRouter()
+    def __init__(
+        self,
+        cache: ContentHashCache | None = None,
+        adaptive_sizing: bool = False,
+        size_bias: float = 1.0,
+    ) -> None:
+        self._router = ContentRouter(adaptive_sizing=adaptive_sizing, size_bias=size_bias)
         self._cache = cache or ContentHashCache()
 
     def apply(
@@ -190,6 +195,8 @@ class TransformPipeline:
         ccr_enabled: bool = True,
         output_shaping: bool = True,
         verbosity_level: int = 2,
+        adaptive_sizing: bool = False,
+        size_bias: float = 1.0,
     ) -> None:
         self.compress_enabled = compress_enabled
         self.cache_align_enabled = cache_align_enabled
@@ -200,7 +207,7 @@ class TransformPipeline:
         self.verbosity_level = verbosity_level
 
         self.cache_aligner = CacheAligner(enabled=cache_align_enabled)
-        self.compressor = CompressPhase()
+        self.compressor = CompressPhase(adaptive_sizing=adaptive_sizing, size_bias=size_bias)
         self.thinking_compactor = ThinkingCompactor()
         self.output_shaper = OutputShaper(verbosity_level=verbosity_level)
         self._applied_transforms: list[str] = []
