@@ -6,7 +6,7 @@ import re
 from collections import Counter
 
 from .compressor_registry import CompressInput, CompressOutput
-from .tokenizer import count_tokens
+from ..tokenizer import count_tokens
 
 
 class LogCompressor:

@@ -9,15 +9,16 @@ from typing import Any
 
 from .config import CompressConfig, CompressResult
 from .tokenizer import count_tokens_messages
-from .compressor_registry import _compute_salience
-from .content_router import ContentRouter
-from .smart_crusher import SmartCrusher, SmartCrusherConfig
-from .adaptive_sizer import compute_optimal_k
+from .compressors.compressor_registry import _compute_salience
+from .compressors.content_router import ContentRouter
+from .compressors.smart_crusher import SmartCrusher, SmartCrusherConfig
+from .compressors.adaptive_sizer import compute_optimal_k
 from .cross_turn_dedup import DedupBlock, dedup_blocks
-from .recursive_json import route_embedded_json
-from .lossless_compaction import compact_lossless
+from .compressors.recursive_json import route_embedded_json
+from .compressors.lossless_compaction import compact_lossless
 from .read_lifecycle import classify_reads, ReadLifecycleConfig, ReadLifecycleResult
 from .output.shaper import OutputShaper
+from .ccr.compression_store import CompressionStore
 from .ccr.tool_injection import CCRToolInjector
 from .query_relevance import latest_query_terms
 
@@ -215,6 +216,7 @@ class TransformPipeline:
         ml_tokenizer_path: str | None = None,
         ml_retention_threshold: float = 0.5,
         ml_min_compression_ratio: float = 0.1,
+        compression_store: CompressionStore | None = None,
     ) -> None:
         self.compress_enabled = compress_enabled
         self.cache_align_enabled = cache_align_enabled
@@ -223,6 +225,7 @@ class TransformPipeline:
         self.ccr_enabled = ccr_enabled
         self.output_shaping = output_shaping
         self.verbosity_level = verbosity_level
+        self.compression_store = compression_store
 
         self.cache_aligner = CacheAligner(enabled=cache_align_enabled)
         self.compressor = CompressPhase(
@@ -298,6 +301,7 @@ class TransformPipeline:
                 logger.warning(f"CrossTurnDedup failed: {e}")
 
         # Phase 2.6: Read Lifecycle — compress stale/superseded Read outputs
+        ccr_hashes: list[str] = []
         if getattr(config, "read_lifecycle_enabled", True):
             try:
                 lifecycle_config = ReadLifecycleConfig(
@@ -307,9 +311,10 @@ class TransformPipeline:
                     min_size_bytes=getattr(config, "min_read_lifecycle_bytes", 50),
                 )
                 lifecycle_result = classify_reads(
-                    current_messages, lifecycle_config, None
+                    current_messages, lifecycle_config, self.compression_store
                 )
                 current_messages = lifecycle_result.messages
+                ccr_hashes = lifecycle_result.ccr_hashes
                 if lifecycle_result.reads_stale > 0 or lifecycle_result.reads_superseded > 0:
                     self._applied_transforms.append("read_lifecycle")
                     self._warnings.append(
@@ -376,6 +381,8 @@ class TransformPipeline:
             metadata["salience_scores_before"] = salience_scores_before
         if salience_scores_after is not None:
             metadata["salience_scores_after"] = salience_scores_after
+        if ccr_hashes:
+            metadata["ccr_hashes"] = ccr_hashes
 
         return TransformResult(
             messages=current_messages,

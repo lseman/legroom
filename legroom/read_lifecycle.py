@@ -393,7 +393,7 @@ def _apply_lifecycle(
         # Anthropic format: content blocks list
         if isinstance(content, list):
             new_blocks, block_replaced = _process_anthropic_blocks(
-                content, replacements, transforms, ccr_hashes
+                content, replacements, transforms, ccr_hashes, config, store
             )
             if block_replaced:
                 result_messages.append({**msg, "content": new_blocks})
@@ -419,6 +419,8 @@ def _process_anthropic_blocks(
     replacements: dict[str, ReadClassification],
     transforms: list[str],
     ccr_hashes: list[str],
+    config: ReadLifecycleConfig,
+    store: Optional[Any],
 ) -> tuple[list[Any], bool]:
     """Process Anthropic-format content blocks for lifecycle replacement."""
     new_blocks = []
@@ -435,7 +437,7 @@ def _process_anthropic_blocks(
 
         if classification and isinstance(tool_content, str):
             replaced, marker, ccr_hash = _replace_content(
-                tool_content, classification, ReadLifecycleConfig(), None
+                tool_content, classification, config, store
             )
             if replaced:
                 new_blocks.append({**block, "content": marker})
@@ -465,8 +467,10 @@ def _replace_content(
     if content_bytes < config.min_size_bytes:
         return False, content, None
 
-    # Best-effort CCR persistence
-    ccr_hash = hashlib.sha256(content.encode()).hexdigest()[:24]
+    # Best-effort CCR persistence. Hash length must match CompressionStore's
+    # own default (16 chars) so the key quoted to the model always matches
+    # the key actually stored, whether or not a store is wired in.
+    ccr_hash = hashlib.sha256(content.encode()).hexdigest()[:16]
     if store is not None:
         try:
             ccr_hash = store.store(

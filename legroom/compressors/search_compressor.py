@@ -8,7 +8,7 @@ from collections import defaultdict
 from typing import Iterable
 
 from .compressor_registry import CompressInput, CompressOutput
-from .tokenizer import count_tokens
+from ..tokenizer import count_tokens
 
 # Below this, factoring out a shared prefix costs more (the "# common: ..."
 # heading) than it saves across the group.

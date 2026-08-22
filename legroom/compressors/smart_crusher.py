@@ -10,8 +10,8 @@ from collections import defaultdict
 
 from .adaptive_sizer import compute_optimal_k
 from .compressor_registry import CompressInput, CompressOutput
-from .query_relevance import query_relevance
-from .tokenizer import count_tokens
+from ..query_relevance import query_relevance
+from ..tokenizer import count_tokens
 
 
 @dataclass

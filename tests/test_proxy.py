@@ -5,9 +5,9 @@ import time
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from legroom.proxy_state import ProxyState, RequestEvent
-from legroom.proxy_server import LegroomProxy
-from legroom.proxy_dashboard import get_dashboard_html
+from legroom.proxy.proxy_state import ProxyState, RequestEvent
+from legroom.proxy.proxy_server import LegroomProxy
+from legroom.proxy.proxy_dashboard import get_dashboard_html
 
 
 # ---------------------------------------------------------------------------

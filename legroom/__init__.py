@@ -3,19 +3,27 @@
 from ._version import __version__
 
 from .config import CompressConfig, CompressResult
-from .content_detector import ContentDetector
-from .content_router import ContentRouter, CompressOutput as RouterCompressOutput, CompressionCache
-from .compressor_registry import CompressInput, CompressOutput
-from .smart_crusher import SmartCrusher, SmartCrusherConfig
-from .log_compressor import LogCompressor
-from .search_compressor import SearchCompressor
-from .code_compressor import CodeCompressor
-from .text_compressor import TextCompressor
-from .ml_compressor import MLTextCompressor
+from .compressors import (
+    ContentDetector,
+    ContentRouter,
+    RouterCompressOutput,
+    CompressionCache,
+    CompressInput,
+    CompressOutput,
+    SmartCrusher,
+    SmartCrusherConfig,
+    LogCompressor,
+    SearchCompressor,
+    CodeCompressor,
+    TextCompressor,
+    MLTextCompressor,
+    route_embedded_json,
+    compact_lossless,
+    LosslessResult,
+    compute_optimal_k,
+    count_unique_simhash,
+)
 from .cross_turn_dedup import DedupBlock, dedup_blocks
-from .recursive_json import route_embedded_json
-from .lossless_compaction import compact_lossless, LosslessResult
-from .adaptive_sizer import compute_optimal_k, count_unique_simhash
 from .query_relevance import extract_query_terms, query_relevance, latest_query_terms
 from .read_lifecycle import (
     ReadLifecycleConfig,
@@ -36,9 +44,7 @@ from .ccr.marker_resolution import parse_markers, resolve_marker, create_resolut
 from .ccr.tool_injection import CCRToolInjector, create_ccr_tool_definition, create_system_instructions
 
 # Proxy and dashboard
-from .proxy_server import LegroomProxy
-from .proxy_state import ProxyState, RequestEvent
-from .proxy_dashboard import get_dashboard_html
+from .proxy import LegroomProxy, ProxyState, RequestEvent, get_dashboard_html
 
 __all__ = [
     "__version__",

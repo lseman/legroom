@@ -16,7 +16,7 @@ from .search_compressor import SearchCompressor
 from .code_compressor import CodeCompressor
 from .text_compressor import TextCompressor
 from .ml_compressor import MLTextCompressor
-from .tokenizer import count_tokens
+from ..tokenizer import count_tokens
 
 logger = logging.getLogger(__name__)
 

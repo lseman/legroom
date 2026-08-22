@@ -57,7 +57,7 @@ def run_proxy(
     """Start the FastAPI proxy server with dashboard."""
     import uvicorn
 
-    from .proxy_server import LegroomProxy
+    from .proxy.proxy_server import LegroomProxy
 
     proxy = LegroomProxy(
         target_url=target,

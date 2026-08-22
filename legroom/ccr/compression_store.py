@@ -14,15 +14,31 @@ class CompressionStore:
         self._store: dict[str, dict[str, Any]] = {}
         self._max_entries = max_entries
 
-    def store(self, original: str, compressed: str) -> str:
-        """Store compressed content, return hash key."""
-        content_hash = hashlib.sha256(original.encode()).hexdigest()[:16]
+    def store(
+        self,
+        original: str,
+        compressed: str,
+        tool_name: str | None = None,
+        tool_call_id: str | None = None,
+        compression_strategy: str | None = None,
+        explicit_hash: str | None = None,
+    ) -> str:
+        """Store compressed content, return hash key.
+
+        Callers may pass `explicit_hash` (e.g. a hash already quoted to the
+        model in a marker) so the stored key matches what the model was told
+        to retrieve. Otherwise a hash is derived from the content.
+        """
+        content_hash = explicit_hash or hashlib.sha256(original.encode()).hexdigest()[:16]
 
         self._store[content_hash] = {
             "original": original,
             "compressed": compressed,
             "size_before": len(original),
             "size_after": len(compressed),
+            "tool_name": tool_name,
+            "tool_call_id": tool_call_id,
+            "compression_strategy": compression_strategy,
         }
 
         # Evict oldest if full (simple FIFO)

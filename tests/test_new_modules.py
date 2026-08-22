@@ -12,7 +12,7 @@ from legroom import (
     compute_optimal_k,
     count_unique_simhash,
 )
-from legroom.content_router import ContentRouter
+from legroom.compressors.content_router import ContentRouter
 
 
 # ---------------------------------------------------------------------------
@@ -202,7 +202,7 @@ def test_adaptive_sizer_simhash():
 
 def test_adaptive_sizer_in_smart_crusher():
     """SmartCrusher should use adaptive sizing by default."""
-    from legroom.smart_crusher import SmartCrusher, SmartCrusherConfig
+    from legroom.compressors.smart_crusher import SmartCrusher, SmartCrusherConfig
 
     config = SmartCrusherConfig(max_items=100, adaptive_sizing=True, size_bias=1.0)
     crusher = SmartCrusher(config)

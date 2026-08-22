@@ -16,7 +16,7 @@ from legroom import (
     compute_optimal_k,
     count_unique_simhash,
 )
-from legroom.content_router import CompressionCache
+from legroom.compressors.content_router import CompressionCache
 
 
 # ---------------------------------------------------------------------------
@@ -113,7 +113,7 @@ def test_compress_config_kwargs():
 
 def test_detect_json():
     """Content detector should identify JSON."""
-    from legroom.content_detector import ContentDetector
+    from legroom.compressors.content_detector import ContentDetector
 
     detector = ContentDetector()
     assert detector.detect('{"key": "value"}') == "json"
@@ -122,7 +122,7 @@ def test_detect_json():
 
 def test_detect_code():
     """Content detector should identify code."""
-    from legroom.content_detector import ContentDetector
+    from legroom.compressors.content_detector import ContentDetector
 
     detector = ContentDetector()
     assert detector.detect("def foo():\n    pass") == "code"
@@ -131,7 +131,7 @@ def test_detect_code():
 
 def test_detect_log():
     """Content detector should identify logs."""
-    from legroom.content_detector import ContentDetector
+    from legroom.compressors.content_detector import ContentDetector
 
     detector = ContentDetector()
     assert detector.detect("2024-01-01T00:00:00Z INFO Hello") == "log"
@@ -139,7 +139,7 @@ def test_detect_log():
 
 def test_detect_search():
     """Content detector should identify search results."""
-    from legroom.content_detector import ContentDetector
+    from legroom.compressors.content_detector import ContentDetector
 
     detector = ContentDetector()
     assert detector.detect("src/main.py:10:import os") == "search"
@@ -147,7 +147,7 @@ def test_detect_search():
 
 def test_detect_mixed():
     """Content detector should identify mixed content."""
-    from legroom.content_detector import ContentDetector
+    from legroom.compressors.content_detector import ContentDetector
 
     detector = ContentDetector()
     mixed = "Here is some text:\n\n```python\ndef foo():\n    pass\n```\n\nAnd some logs:\n2024-01-01 INFO Hello"
@@ -157,7 +157,7 @@ def test_detect_mixed():
 
 def test_split_mixed():
     """Content detector should split mixed content into sections."""
-    from legroom.content_detector import ContentDetector
+    from legroom.compressors.content_detector import ContentDetector
 
     detector = ContentDetector()
     mixed = "code1\ncode2\nlog line"
@@ -329,7 +329,7 @@ def test_cross_turn_dedup_in_pipeline():
 def test_recursive_json_embedded():
     """JSON embedded in larger text should be routed through the compressor."""
     text = "Here's the result:\n" + json.dumps([{"id": i, "data": "x" * 20} for i in range(15)], indent=2) + "\n\nDone."
-    from legroom.content_router import ContentRouter
+    from legroom.compressors.content_router import ContentRouter
 
     router = ContentRouter()
 

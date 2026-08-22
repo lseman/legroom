@@ -7,12 +7,14 @@ from typing import Any
 from .config import CompressConfig, CompressResult
 from .pipeline import TransformPipeline, TransformResult
 from .tokenizer import count_tokens_messages
+from .ccr.compression_store import CompressionStore
 
 
 def compress(
     messages: list[dict[str, Any]],
     model: str = "gpt-4o",
     config: CompressConfig | None = None,
+    compression_store: CompressionStore | None = None,
     **kwargs: Any,
 ) -> CompressResult:
     """Compress a list of messages using the default pipeline.
@@ -21,6 +23,9 @@ def compress(
         messages: List of message dicts with 'role' and 'content' keys.
         model: Model name for token counting (affects encoding).
         config: Compression configuration.
+        compression_store: Optional CCR store for persisting/retrieving
+            content replaced by the read lifecycle phase. Without one,
+            replaced content cannot actually be retrieved later.
         **kwargs: Additional config overrides (protect_recent, optimize, etc.)
 
     Returns:
@@ -48,6 +53,7 @@ def compress(
         ml_tokenizer_path=cfg.ml_tokenizer_path,
         ml_retention_threshold=cfg.retention_threshold,
         ml_min_compression_ratio=cfg.min_compression_ratio,
+        compression_store=compression_store,
     )
 
     result = pipeline.apply(messages, model=model, config=cfg)

@@ -10,7 +10,7 @@ import os
 import uuid
 from collections import OrderedDict
 from contextlib import asynccontextmanager
-from typing import Any, AsyncIterator, Optional
+from typing import Any, AsyncIterator
 
 import httpx
 import fastapi
@@ -19,10 +19,14 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
-from .config import CompressConfig
-from .compress import compress
+from ..config import CompressConfig
+from ..compress import compress
 from .proxy_state import ProxyState
-from .tokenizer import count_tokens
+from ..tokenizer import count_tokens
+from ..ccr.compression_store import CompressionStore
+from ..ccr.tool_injection import create_ccr_tool_definition
+
+_CCR_RETRIEVE_MAX_HOPS = 4
 
 logger = logging.getLogger(__name__)
 
@@ -142,6 +146,7 @@ class LegroomProxy:
         self._state = ProxyState(max_history=max_history)
         self._request_dedup = RequestDedupCache()
         self._cors_origins = cors_origins
+        self._compression_store = CompressionStore()
 
         # Create FastAPI app with lifespan
         self.app = FastAPI(
@@ -258,7 +263,15 @@ class LegroomProxy:
                         ccr_enabled=True,
                         read_lifecycle_enabled=True,
                     )
-                    result = compress(messages, model=model, config=config)
+                    result = compress(
+                        messages,
+                        model=model,
+                        config=config,
+                        compression_store=self._compression_store,
+                    )
+                    ccr_hashes = result.metadata.get("ccr_hashes") if result.metadata else None
+                    if ccr_hashes:
+                        self._state.record_ccr_store(len(ccr_hashes))
 
                     # Update body with compressed messages
                     body["messages"] = result.messages
@@ -284,6 +297,27 @@ class LegroomProxy:
 
                     # Store in request dedup cache
                     self._request_dedup.put(model, messages, result.messages)
+
+                    # Advertise the CCR retrieval tool whenever this request
+                    # contains retrievable markers, streaming or not — the
+                    # pipeline's injected system instructions always mention
+                    # `ccr_retrieve`, so the tool must always be registered
+                    # too or the model is told about a tool the upstream API
+                    # doesn't know about. Streaming responses still can't be
+                    # intercepted and auto-resolved server-side (see the
+                    # is_stream branch below); on streaming, a resulting
+                    # tool_use call is simply forwarded to the caller like
+                    # any other tool call instead of being answered inline.
+                    if ccr_hashes:
+                        tools = body.get("tools")
+                        if tools is None:
+                            tools = []
+                            body["tools"] = tools
+                        existing_names = {
+                            t.get("name") for t in tools if isinstance(t, dict)
+                        }
+                        if "ccr_retrieve" not in existing_names:
+                            tools.append(create_ccr_tool_definition())
 
             # Forward to target LLM API
             client = self.app.state.http_client
@@ -333,9 +367,16 @@ class LegroomProxy:
                     if k.lower() not in ("transfer-encoding", "connection", "content-length")
                 }
                 try:
-                    body = resp.json()
+                    resp_body = resp.json()
                 except Exception:
-                    body = {"error": {"message": resp.text, "type": "proxy_error"}}
+                    resp_body = {"error": {"message": resp.text, "type": "proxy_error"}}
+
+                if resp.status_code == 200 and "tools" in body:
+                    resp_body, resp = await self._resolve_ccr_retrieve_loop(
+                        client, body, resp_body, headers, resp
+                    )
+
+                body = resp_body
                 return JSONResponse(
                     content=body,
                     status_code=resp.status_code,
@@ -348,6 +389,71 @@ class LegroomProxy:
                 content={"error": str(e)},
                 status_code=502,
             )
+    async def _resolve_ccr_retrieve_loop(
+        self,
+        client: httpx.AsyncClient,
+        request_body: dict[str, Any],
+        response_body: dict[str, Any],
+        headers: dict[str, str],
+        initial_response: httpx.Response,
+    ) -> tuple[dict[str, Any], httpx.Response]:
+        """Resolve any ccr_retrieve tool calls server-side and re-call upstream.
+
+        The proxy — not the client agent harness — owns the CCR store, so it
+        must answer ccr_retrieve calls itself: it appends the assistant's
+        tool_use turn plus a synthetic tool_result to the conversation and
+        re-posts to the upstream API, transparently to the caller. Bounded by
+        _CCR_RETRIEVE_MAX_HOPS in case of a pathological loop.
+        """
+        body = dict(request_body)
+        resp_body = response_body
+        last_resp: httpx.Response = initial_response
+
+        for _ in range(_CCR_RETRIEVE_MAX_HOPS):
+            if resp_body.get("stop_reason") != "tool_use":
+                break
+
+            content_blocks = resp_body.get("content", [])
+            if not isinstance(content_blocks, list):
+                break
+
+            retrieve_calls = [
+                b for b in content_blocks
+                if isinstance(b, dict) and b.get("type") == "tool_use" and b.get("name") == "ccr_retrieve"
+            ]
+            if not retrieve_calls:
+                break
+
+            tool_results = []
+            for call in retrieve_calls:
+                hash_key = (call.get("input") or {}).get("hash", "")
+                original = self._compression_store.retrieve(hash_key)
+                if original is not None:
+                    self._state.record_ccr_retrieve()
+                    result_content = original
+                else:
+                    result_content = f"[No content found for hash={hash_key!r} — it may have expired.]"
+                tool_results.append({
+                    "type": "tool_result",
+                    "tool_use_id": call.get("id", ""),
+                    "content": result_content,
+                })
+
+            messages = list(body.get("messages", []))
+            messages.append({"role": "assistant", "content": content_blocks})
+            messages.append({"role": "user", "content": tool_results})
+            body = {**body, "messages": messages}
+
+            last_resp = await client.post(self.target_url, json=body, headers=headers)
+            try:
+                resp_body = last_resp.json()
+            except Exception:
+                break
+            if last_resp.status_code != 200:
+                break
+
+        return resp_body, last_resp
+
     async def _get_stats(self) -> JSONResponse:
         """Return aggregate stats."""
         return JSONResponse(content=self._state.get_stats())

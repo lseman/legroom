@@ -6,7 +6,7 @@ import re
 from typing import Any
 
 from .compressor_registry import CompressInput, CompressOutput
-from .tokenizer import count_tokens
+from ..tokenizer import count_tokens
 
 # Triple-quote string delimiters defined via chr() to avoid syntax issues
 TRIPLE_DQ = chr(34) * 3  # """
