@@ -55,12 +55,14 @@ class CompressOutput:
         compressed_token_count: int,
         strategy: str = "unknown",
         routing_log: list[dict] | None = None,
+        content_type: str | None = None,
     ) -> None:
         self.compressed = compressed
         self.original_token_count = original_token_count
         self.compressed_token_count = compressed_token_count
         self.strategy = strategy
         self.routing_log = routing_log or []
+        self.content_type = content_type
 
     @property
     def tokens_saved(self) -> int:
@@ -127,7 +129,7 @@ class ContentRouter:
         # Check cache — skipped for query-aware compression, since a cached
         # result may have been produced (or would be reused) under a
         # different query's relevance bias.
-        content_hash = hashlib.sha256(content.encode()).hexdigest()[:16]
+        content_hash = hashlib.md5(content.encode()).hexdigest()[:16]
         if not query_terms:
             cached = self._cache.get(content_hash)
             if cached:
@@ -151,8 +153,13 @@ class ContentRouter:
         else:
             output = self._compress_text(content, source_hint, model)
 
+        # Tag the output with the content type so callers can decide
+        # whether the recursive JSON phase is still needed.
         if output and not query_terms:
+            output.content_type = content_type
             self._cache.put(content_hash, output.compressed)
+        elif output:
+            output.content_type = content_type
 
         return output
 
@@ -170,6 +177,7 @@ class ContentRouter:
                         original_token_count=output.original_token_count,
                         compressed_token_count=output.compressed_token_count,
                         strategy="smart_crusher",
+                        content_type="json",
                     )
         except (json.JSONDecodeError, ValueError):
             pass
@@ -177,20 +185,31 @@ class ContentRouter:
 
     def _compress_log(self, content: str, source_hint: str, model: str) -> Optional[CompressOutput]:
         """Compress log content."""
-        return self._log_compressor.compress(content, source_hint, model)
+        output = self._log_compressor.compress(content, source_hint, model)
+        if output:
+            output.content_type = "log"
+        return output
 
     def _compress_search(self, content: str, source_hint: str, model: str) -> Optional[CompressOutput]:
         """Compress search results."""
-        return self._search_compressor.compress(content, source_hint, model)
+        output = self._search_compressor.compress(content, source_hint, model)
+        if output:
+            output.content_type = "search"
+        return output
 
     def _compress_code(self, content: str, source_hint: str, model: str) -> Optional[CompressOutput]:
         """Compress code content."""
-        return self._code_compressor.compress(content, source_hint, model)
+        output = self._code_compressor.compress(content, source_hint, model)
+        if output:
+            output.content_type = "code"
+        return output
 
     def _compress_text(self, content: str, source_hint: str, model: str) -> Optional[CompressOutput]:
         """Compress plain text: lossless whitespace normalization, then
         optional lossy ML token-retention scoring on top when enabled."""
         output = self._text_compressor.compress(content, source_hint, model)
+        if output:
+            output.content_type = "text"
         if self._ml_compressor is None:
             return output
 

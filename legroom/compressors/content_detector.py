@@ -22,7 +22,7 @@ class ContentDetector:
 
     def detect(self, content: str) -> str:
         """Detect the type of content."""
-        if not content or not content.strip():
+        if not isinstance(content, str) or not content.strip():
             return "text"
 
         stripped = content.strip()

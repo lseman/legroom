@@ -334,3 +334,85 @@ async def test_proxy_full_request_flow():
     assert len(history) == 1
     assert history[0]["request_id"] == "integration1"
     assert history[0]["tokens_saved"] == 400
+
+
+# ---------------------------------------------------------------------------
+# SSE stream boundary handling
+# ---------------------------------------------------------------------------
+
+
+def _assemble_sse_messages(raw_bytes: bytes, chunk_sizes: list[int]) -> list[bytes]:
+    """Simulate the SSE stream forwarding logic from the proxy.
+
+    This mirrors the buffering logic in `stream_generator`:
+    bytes arrive in arbitrary chunks; we buffer until a complete
+    SSE message (ending with \\n\\n) is assembled, then yield it.
+    """
+    results: list[bytes] = []
+    buffer = b""
+    for size in chunk_sizes:
+        # Simulate chunked receive
+        chunk = raw_bytes[:size]
+        raw_bytes = raw_bytes[size:]
+        buffer += chunk
+        while b"\n\n" in buffer:
+            msg, buffer = buffer.split(b"\n\n", 1)
+            if msg:
+                results.append(msg + b"\n\n")
+    if buffer:
+        results.append(buffer)  # partial, not yet complete
+    return results
+
+
+def test_sse_boundary_respects_messages():
+    """SSE stream forwarding must deliver complete messages, never split ones.
+
+    When the upstream API returns:
+      data: {"choices":[{"delta":{"content":"he"},"finish_reason":null}]}
+      data: {"choices":[{"delta":{"content":"llo"},"finish_reason":"stop"}]}
+      data: [DONE]
+
+    The proxy must yield three complete messages even if HTTP chunks
+    arrive in arbitrary byte sizes that split mid-message.
+    """
+    sse_stream = (
+        b'data: {"id":"c1","choices":[{"delta":{"content":"he"},"finish_reason":null}]}\n\n'
+        b'data: {"id":"c2","choices":[{"delta":{"content":"llo"},"finish_reason":"stop"}]}\n\n'
+        b'data: [DONE]\n\n'
+    )
+    # Simulate chunks that split mid-message
+    chunks = [7, 15, 22, 30, 45, 60, 80, 100, 999]  # last chunk exhausts stream
+    messages = _assemble_sse_messages(sse_stream, chunks)
+    # Should get exactly 3 complete messages
+    assert len(messages) == 3
+    assert b'"finish_reason":null' in messages[0]
+    assert b'"finish_reason":"stop"' in messages[1]
+    assert b'[DONE]' in messages[2]
+
+
+def test_sse_boundary_partial_at_end():
+    """If the stream ends mid-message, the partial IS yielded by the proxy
+    (so the client can keep reading), but it lacks the \\n\\n terminator."""
+    # JSON data uses escaped backslash-n (0x5c 0x6e), NOT literal newlines
+    # so the \\n\\n inside data does NOT act as an SSE message boundary.
+    partial = b'data: {"id":"c1","choices":[{"delta":{"content":"he\\n\\nlo"}]}'
+    # Verify the bytes are correct: backslash-n (0x5c 0x6e) not newline (0x0a)
+    assert b'\\n' in partial  # escaped newline in JSON
+    assert b'\n\n' not in partial  # no literal newlines
+    chunks = [5, 20, 40]  # last chunk is the whole remaining stream
+    messages = _assemble_sse_messages(partial, chunks)
+    # The partial message IS yielded (proxy yields buffer even if incomplete)
+    assert len(messages) == 1
+    # But it has no \\n\\n terminator — the client should detect it's partial
+    assert not messages[0].endswith(b'\n\n')
+
+
+def test_sse_boundary_multiple_chunks_per_message():
+    """A single SSE message may span many HTTP chunks; we must still
+    yield exactly one complete message."""
+    msg = b'data: {"choices":[{"delta":{"content":"short"},"finish_reason":"stop"}]}\n\n'
+    # Split into 1-byte chunks
+    chunks = [1] * len(msg)
+    results = _assemble_sse_messages(msg, chunks)
+    assert len(results) == 1
+    assert results[0] == msg

@@ -13,6 +13,14 @@ TRIPLE_DQ = chr(34) * 3  # """
 TRIPLE_SQ = chr(39) * 3  # '''
 HASH_COMMENT = "#"
 
+# Pre-compiled regex patterns
+_CODE_BLOCK = re.compile(r"```(\w*)\n(.*?)```", re.DOTALL)
+_CODE_BLOCK_SPLIT = re.compile(r"(```(\w*)\n.*?```)", re.DOTALL)
+_CODE_LANG = re.compile(r"```(\w*)")
+_CODE_BLOCK_END = re.compile(r"^```\w*\n|\n```$")
+_WS_NORMALIZE = re.compile(r"[ \t]+")
+_STRING_LITERAL = re.compile(r'(?<=[(,=:])\s*([fbr]?"[^"]*?")')
+
 
 class CodeCompressor:
     """Compresses code content via normalization, comment stripping, dedup, and string compression."""
@@ -21,20 +29,20 @@ class CodeCompressor:
         self, content: str, source_hint: str = "code", model: str = "gpt-4o"
     ) -> CompressOutput:
         """Compress code content with multiple strategies."""
-        code_blocks = re.findall(r"```(\w*)\n(.*?)```", content, re.DOTALL)
+        code_blocks = _CODE_BLOCK.findall(content)
 
         if not code_blocks:
             return self._compress_plain_text(content, model)
 
         result = []
-        parts = re.split(r"(```(\w*)\n.*?```)", content, flags=re.DOTALL)
+        parts = _CODE_BLOCK_SPLIT.split(content)
 
         for part in parts:
             if not part:
                 continue
             if part.startswith("```"):
-                lang = re.match(r"```(\w*)", part).group(1) or ""
-                code_body = re.sub(r"^```\w*\n|\n```$", "", part).strip()
+                lang = _CODE_LANG.match(part).group(1) or ""
+                code_body = _CODE_BLOCK_END.sub("", part).strip()
                 code_body = self._compress_code_block(code_body, model)
                 result.append(f"```{lang}\n{code_body}\n```")
             else:
@@ -56,7 +64,7 @@ class CodeCompressor:
         lines = content.split("\n")
         lines = self._strip_comments(lines)
         lines = self._collapse_duplicate_lines(lines)
-        normalized = "\n".join([re.sub(r"[ \t]+", " ", l).strip() for l in lines])
+        normalized = "\n".join([_WS_NORMALIZE.sub(" ", l).strip() for l in lines])
         if len(normalized) < len(content):
             return CompressOutput(
                 compressed=normalized,
@@ -76,7 +84,7 @@ class CodeCompressor:
         lines = code.split("\n")
         lines = self._strip_comments(lines)
         lines = self._collapse_duplicate_lines(lines)
-        lines = [re.sub(r"[ \t]+", " ", line).strip() for line in lines]
+        lines = [_WS_NORMALIZE.sub(" ", line).strip() for line in lines]
         lines = [self._compress_string_literals(line) for line in lines]
         return "\n".join(lines)
 
@@ -150,6 +158,5 @@ class CodeCompressor:
             if len(inner) > 60:
                 return prefix + chr(34) + inner[:30] + "..." + inner[-20:] + chr(34)
             return m.group(0)
-        pat = r'(?<=[(,=:])\s*([fbr]?)("[^"]*?")'
-        line = re.sub(pat, _compress_match, line)
+        line = _STRING_LITERAL.sub(_compress_match, line)
         return line

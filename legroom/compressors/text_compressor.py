@@ -1,11 +1,10 @@
 """Text compressor — sentence-level compression with TF-IDF ranking.
 
-Unlike the old version that only normalised whitespace, this compressor:
-  1. Splits content into sentences (handling abbreviations, numbers, etc.)
-  2. Scores each sentence via TF-IDF-style weighting (rare words = more
-     salient; first sentences get a position bonus)
-  3. Keeps the top-K sentences and replaces the rest with a compact summary
-     line so the model knows information was omitted.
+Optimized with:
+  1. Pre-computed IDF scores (cached per unique vocabulary set)
+  2. Sentence splitting cache to avoid re-splitting identical content
+  3. Combined whitespace normalization where possible
+  4. Fast dict lookups for IDF scoring
 
 This is the single biggest win for plain-text tool outputs (grep results,
 log dumps, file reads) that previously got near-zero compression.
@@ -13,9 +12,10 @@ log dumps, file reads) that previously got near-zero compression.
 
 from __future__ import annotations
 
+import hashlib
 import math
 import re
-from collections import Counter
+from collections import Counter, OrderedDict
 
 from .compressor_registry import CompressInput, CompressOutput
 from ..tokenizer import count_tokens
@@ -49,7 +49,39 @@ _SENTENCE_SPLIT = re.compile(
     r"\n+"  # newlines are also sentence boundaries
 )
 
+# Pre-compiled whitespace normalization patterns for text_compressor.compress
+# Note: 3 separate re.sub calls are faster than a Python character loop
+# because the C-optimized regex engine beats pure Python loops.
+_WS_NORM = re.compile(r"[ \t]+")
+_NL_TRIPLE = re.compile(r"\n{3,}")
+_WS_NL = re.compile(r"[ \t]+\n")
+
 _COMPRESS_SUMMARY = "[~{n} omitted sentences of technical details]"
+
+# Sentence splitting cache (avoids re-splitting identical content)
+_sentence_split_cache: OrderedDict[str, list[str]] = OrderedDict()
+_SENTENCE_SPLIT_CACHE_MAX = 512
+
+
+def _split_sentences_cached(text: str) -> list[str]:
+    """Split text into sentences with LRU caching."""
+    cache_key = hashlib.md5(text.encode()).hexdigest()
+    cached = _sentence_split_cache.get(cache_key)
+    if cached is not None:
+        _sentence_split_cache.move_to_end(cache_key)
+        return cached
+
+    result = _split_sentences(text)
+
+    # Cache result (LRU — evict oldest when full)
+    if len(_sentence_split_cache) >= _SENTENCE_SPLIT_CACHE_MAX:
+        _sentence_split_cache.pop(next(iter(_sentence_split_cache)))
+    _sentence_split_cache[cache_key] = result
+
+    return result
+
+
+_NL_TO_SPACE = re.compile(r"\n+")
 
 
 def _split_sentences(text: str) -> list[str]:
@@ -58,7 +90,7 @@ def _split_sentences(text: str) -> list[str]:
         return []
 
     # First, handle newlines as sentence boundaries (replace with single space)
-    text = re.sub(r"\n+", " ", text)
+    text = _NL_TO_SPACE.sub(" ", text)
 
     # Split on sentence-ending punctuation followed by whitespace + uppercase.
     # The lookbehind keeps the period attached to the preceding sentence.
@@ -116,16 +148,61 @@ _STOPWORDS = frozenset(
 
 _WORD_RE = re.compile(r"[a-z0-9_]+")
 
+# IDF score cache keyed by frozenset of unique words (avoids recomputing IDF)
+_idf_cache: dict[frozenset[str], dict[str, float]] = {}
+_IDF_CACHE_MAX = 128
+
 
 def _tokenize(sentence: str) -> list[str]:
     """Extract lowercased words from a sentence."""
     return _WORD_RE.findall(sentence.lower())
 
 
+def _compute_idf_fast(
+    n_sentences: int,
+    all_tokenized: list[list[str]],
+) -> dict[str, float]:
+    """Compute IDF scores using cached vocabulary.
+
+    Pre-computes IDF for all words in the document to avoid repeated
+    lookups during scoring. Uses a frozenset key for caching.
+    """
+    # Create cache key from unique words
+    unique_words: frozenset[str] = frozenset()
+    for tokens in all_tokenized:
+        unique_words = unique_words | set(tokens)
+
+    cached = _idf_cache.get(unique_words)
+    if cached is not None:
+        return cached
+
+    # Compute document frequency
+    doc_freq: Counter = Counter()
+    for tokens in all_tokenized:
+        unique = set(tokens)
+        for w in unique:
+            doc_freq[w] += 1
+
+    # Compute IDF for each word
+    idf: dict[str, float] = {}
+    for w, df in doc_freq.items():
+        if w in _STOPWORDS or len(w) < 2:
+            idf[w] = 0.0
+        else:
+            idf[w] = math.log((n_sentences + 1) / (df + 1)) + 1  # smoothing
+
+    # Cache result (LRU — evict oldest when full)
+    if len(_idf_cache) >= _IDF_CACHE_MAX:
+        _idf_cache.pop(next(iter(_idf_cache)))
+    _idf_cache[unique_words] = idf
+
+    return idf
+
+
 def _score_sentences(
     sentences: list[str],
 ) -> list[tuple[float, int]]:
-    """Score each sentence and return (score, index) pairs.
+    """Score each sentence using pre-computed IDF for speed.
 
     TF-IDF-style: rare words within the document get higher weight.
     First ~25% of sentences get a position bonus.
@@ -137,38 +214,32 @@ def _score_sentences(
     # Tokenize all sentences
     tokenized = [_tokenize(s) for s in sentences]
 
-    # Document-level word frequency
-    doc_freq: Counter = Counter()
-    for tokens in tokenized:
-        unique = set(tokens)
-        for w in unique:
-            doc_freq[w] += 1
+    # Compute IDF once for the entire document (cached)
+    idf = _compute_idf_fast(n, tokenized)
 
-    # IDF for each word: log(N / df)
-    idf: dict[str, float] = {}
-    for w, df in doc_freq.items():
-        if w in _STOPWORDS or len(w) < 2:
-            idf[w] = 0.0
-        else:
-            idf[w] = math.log((n + 1) / (df + 1)) + 1  # smoothing
+    # Pre-compute position bonus factor (same for all sentences in first 25%)
+    top_quarter = n * 0.25
+    top_quarter_max = max(top_quarter, 1)
 
-    # Score each sentence
+    # Score each sentence using fast dict lookups
     scores: list[float] = []
     for i, tokens in enumerate(tokenized):
         if not tokens:
             scores.append(0.0)
             continue
 
-        # TF-IDF sum
-        tfidf_sum = sum(idf.get(w, 0.0) for w in tokens)
+        # TF-IDF sum — direct dict lookup (fast in Python)
+        tfidf_sum = 0.0
+        for w in tokens:
+            tfidf_sum += idf.get(w, 0.0)
 
         # Normalize by sentence length (avoid bias toward long sentences)
         tfidf_avg = tfidf_sum / len(tokens)
 
         # Position bonus: first 25% of sentences get a boost
         pos_bonus = 1.0
-        if i < n * 0.25:
-            pos_bonus = 1.0 + 0.5 * (1.0 - i / max(n * 0.25, 1))
+        if i < top_quarter:
+            pos_bonus = 1.0 + 0.5 * (1.0 - i / top_quarter_max)
 
         # Length bonus: very short sentences (< 5 words) get a small penalty
         length_bonus = 1.0
@@ -209,14 +280,14 @@ class TextCompressor:
         Returns the original text unchanged if there are fewer than
         ``min_sentences`` sentences (nothing to summarise).
         """
-        # Lossless whitespace normalisation (always applied)
-        collapsed = re.sub(r"[ \t]+", " ", content)
-        collapsed = re.sub(r"\n{3,}", "\n\n", collapsed)
-        collapsed = re.sub(r"[ \t]+\n", "\n", collapsed)
+        # Lossless whitespace normalisation (3 fast C-optimized passes)
+        collapsed = _WS_NORM.sub(" ", content)
+        collapsed = _NL_TRIPLE.sub("\n\n", collapsed)
+        collapsed = _WS_NL.sub("\n", collapsed)
         collapsed = collapsed.strip()
 
         # Sentence-level compression (only if enough sentences exist)
-        sentences = _split_sentences(collapsed)
+        sentences = _split_sentences_cached(collapsed)
         n = len(sentences)
 
         if n < self.min_sentences:

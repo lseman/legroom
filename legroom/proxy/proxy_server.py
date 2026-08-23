@@ -22,7 +22,7 @@ from fastapi.staticfiles import StaticFiles
 from ..config import CompressConfig
 from ..compress import compress
 from .proxy_state import ProxyState
-from ..tokenizer import count_tokens
+from ..tokenizer import count_tokens_messages
 from ..ccr.compression_store import CompressionStore
 from ..ccr.tool_injection import create_ccr_tool_definition
 
@@ -233,16 +233,11 @@ class LegroomProxy:
                 cached = self._request_dedup.get(model, messages)
                 if cached is not None:
                     body["messages"] = cached
-                    # Compute token counts using accurate tiktoken
-                    cached_tokens_before = sum(
-                        count_tokens(m.get("content", ""), model)
-                        for m in messages
-                    )
-                    cached_tokens_after = sum(
-                        count_tokens(m.get("content", ""), model)
-                        for m in cached
-                    )
-                    body["messages"] = cached
+                    # count_tokens_messages (not count_tokens) since message
+                    # content may be a content-block list rather than a plain
+                    # string — count_tokens returns 0 for non-string content.
+                    cached_tokens_before = count_tokens_messages(messages, model)
+                    cached_tokens_after = count_tokens_messages(cached, model)
 
                     # Record stats with accurate counts
                     self._state.record_request(
@@ -314,7 +309,11 @@ class LegroomProxy:
                             tools = []
                             body["tools"] = tools
                         existing_names = {
-                            t.get("name") for t in tools if isinstance(t, dict)
+                            t.get("function", {}).get("name")
+                            if isinstance(t, dict) and "function" in t
+                            else t.get("name")
+                            for t in tools
+                            if isinstance(t, dict)
                         }
                         if "ccr_retrieve" not in existing_names:
                             tools.append(create_ccr_tool_definition())
@@ -331,8 +330,16 @@ class LegroomProxy:
             headers.pop("transfer-encoding", None)
 
             if is_stream:
-                # Streaming mode — use streaming HTTP request to forward SSE chunks in real-time
+                # Streaming mode — forward SSE chunks with proper message boundaries.
+                # The upstream API returns SSE messages terminated by "\n\n". Using
+                # aiter_bytes() alone splits at arbitrary HTTP boundaries which
+                # corrupts the SSE stream and causes clients (e.g. OpenAI SDK)
+                # to report "Stream ended without finish_reason". We buffer
+                # incoming bytes until a complete SSE message is assembled.
                 async def stream_generator():
+                    nonlocal resp_headers
+                    resp_headers = {}
+
                     async with client.stream(
                         "POST",
                         self.target_url,
@@ -340,14 +347,32 @@ class LegroomProxy:
                         headers=headers,
                     ) as resp:
                         # Forward response headers
-                        nonlocal resp_headers
                         resp_headers = {
                             k: v for k, v in resp.headers.items()
                             if k.lower() not in ("transfer-encoding", "connection", "content-length")
                         }
-                        # Stream chunks as they arrive
+
+                        # Accumulate bytes; each SSE message ends with "\n\n".
+                        buffer = b""
                         async for chunk in resp.aiter_bytes():
-                            yield chunk
+                            buffer += chunk
+                            # Split on "\n\n" to extract complete SSE messages.
+                            # The SSE spec requires each message to end with a
+                            # blank line.
+                            while b"\n\n" in buffer:
+                                msg, buffer = buffer.split(b"\n\n", 1)
+                                if msg:
+                                    yield msg + b"\n\n"
+                        # Any remaining bytes are an incomplete SSE message
+                        # (upstream closed mid-message). Forward them anyway
+                        # — dropping them causes "Stream ended without
+                        # finish_reason" errors on the client side.
+                        if buffer:
+                            logger.info(
+                                "SSE stream ended with %d trailing bytes (forwarded)",
+                                len(buffer),
+                            )
+                            yield buffer
 
                 return StreamingResponse(
                     stream_generator(),
@@ -401,8 +426,12 @@ class LegroomProxy:
 
         The proxy — not the client agent harness — owns the CCR store, so it
         must answer ccr_retrieve calls itself: it appends the assistant's
-        tool_use turn plus a synthetic tool_result to the conversation and
-        re-posts to the upstream API, transparently to the caller. Bounded by
+        tool_calls turn plus a synthetic tool result message per call to the
+        conversation and re-posts to the upstream API, transparently to the
+        caller. Upstream speaks the OpenAI chat-completions wire format (see
+        LEGROOM_TARGET_URL / finish_reason handling above), so responses are
+        read as `choices[0].message` with `finish_reason == "tool_calls"`,
+        not Anthropic's `stop_reason`/`content` blocks. Bounded by
         _CCR_RETRIEVE_MAX_HOPS in case of a pathological loop.
         """
         body = dict(request_body)
@@ -410,38 +439,46 @@ class LegroomProxy:
         last_resp: httpx.Response = initial_response
 
         for _ in range(_CCR_RETRIEVE_MAX_HOPS):
-            if resp_body.get("stop_reason") != "tool_use":
+            choices = resp_body.get("choices", [])
+            if not choices:
+                break
+            choice = choices[0]
+            if choice.get("finish_reason") != "tool_calls":
                 break
 
-            content_blocks = resp_body.get("content", [])
-            if not isinstance(content_blocks, list):
-                break
+            message = choice.get("message", {})
+            tool_calls = message.get("tool_calls") or []
 
             retrieve_calls = [
-                b for b in content_blocks
-                if isinstance(b, dict) and b.get("type") == "tool_use" and b.get("name") == "ccr_retrieve"
+                tc for tc in tool_calls
+                if isinstance(tc, dict) and tc.get("function", {}).get("name") == "ccr_retrieve"
             ]
             if not retrieve_calls:
                 break
 
-            tool_results = []
+            tool_messages = []
             for call in retrieve_calls:
-                hash_key = (call.get("input") or {}).get("hash", "")
+                func = call.get("function", {})
+                try:
+                    args = json.loads(func.get("arguments") or "{}")
+                except (ValueError, TypeError):
+                    args = {}
+                hash_key = args.get("hash", "")
                 original = self._compression_store.retrieve(hash_key)
                 if original is not None:
                     self._state.record_ccr_retrieve()
                     result_content = original
                 else:
                     result_content = f"[No content found for hash={hash_key!r} — it may have expired.]"
-                tool_results.append({
-                    "type": "tool_result",
-                    "tool_use_id": call.get("id", ""),
+                tool_messages.append({
+                    "role": "tool",
+                    "tool_call_id": call.get("id", ""),
                     "content": result_content,
                 })
 
             messages = list(body.get("messages", []))
-            messages.append({"role": "assistant", "content": content_blocks})
-            messages.append({"role": "user", "content": tool_results})
+            messages.append(message)
+            messages.extend(tool_messages)
             body = {**body, "messages": messages}
 
             last_resp = await client.post(self.target_url, json=body, headers=headers)

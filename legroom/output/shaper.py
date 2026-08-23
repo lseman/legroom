@@ -21,7 +21,7 @@ class OutputShaper:
         for i in range(len(result) - 1, -1, -1):
             if result[i].get("role") == "assistant":
                 content = result[i].get("content", "")
-                if self._is_concise_enough(content) or not content.strip():
+                if not isinstance(content, str) or not content.strip() or self._is_concise_enough(content):
                     break
                 # Steer the last user message only if not protected
                 if self.protect_recent > 0 and i < len(result) - self.protect_recent:

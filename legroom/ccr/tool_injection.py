@@ -12,23 +12,40 @@ _MARKERS = [
 ]
 
 
-def create_ccr_tool_definition(provider: str = "anthropic") -> dict[str, Any]:
-    """Create the CCR retrieval tool definition."""
-    tool_def = {
-        "name": "ccr_retrieve",
-        "description": "Retrieve original content for a compressed output using its hash.",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "hash": {
-                    "type": "string",
-                    "description": "The hash key of the compressed content to retrieve.",
-                },
+def create_ccr_tool_definition(provider: str = "openai") -> dict[str, Any]:
+    """Create the CCR retrieval tool definition.
+
+    The proxy's upstream target speaks the OpenAI chat-completions wire
+    format (see LEGROOM_TARGET_URL / finish_reason handling in
+    proxy_server.py), so the tool must be shaped as an OpenAI "function"
+    tool — a top-level Anthropic-shaped {name, input_schema} tool is
+    silently unusable to an OpenAI-compatible model and the model falls
+    back to describing the call in plain text instead of a real tool call.
+    """
+    parameters = {
+        "type": "object",
+        "properties": {
+            "hash": {
+                "type": "string",
+                "description": "The hash key of the compressed content to retrieve.",
             },
-            "required": ["hash"],
+        },
+        "required": ["hash"],
+    }
+    if provider == "anthropic":
+        return {
+            "name": "ccr_retrieve",
+            "description": "Retrieve original content for a compressed output using its hash.",
+            "input_schema": parameters,
+        }
+    return {
+        "type": "function",
+        "function": {
+            "name": "ccr_retrieve",
+            "description": "Retrieve original content for a compressed output using its hash.",
+            "parameters": parameters,
         },
     }
-    return tool_def
 
 
 def create_system_instructions(hash_list: list[str]) -> str:
@@ -52,7 +69,7 @@ in tool results to find the hash for each compressed output.
 class CCRToolInjector:
     """Manages CCR tool injection into LLM requests."""
 
-    provider: str = "anthropic"
+    provider: str = "openai"
     inject_tool: bool = True
     _inject_system_instructions: bool = True
 
@@ -136,6 +153,15 @@ class CCRToolInjector:
         for msg in messages:
             if msg.get("role") == "system":
                 existing = msg.get("content", "")
+                # A system message's content is occasionally a content-block
+                # list or None rather than a plain string; only string content
+                # can be appended to in place, so fall back to replacing the
+                # whole message rather than raising on non-string content.
+                if not isinstance(existing, str):
+                    return [
+                        {"role": "system", "content": instructions},
+                        *messages,
+                    ]
                 msg["content"] = existing.rstrip() + "\n\n" + instructions
                 return messages
 

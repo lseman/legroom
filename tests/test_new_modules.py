@@ -276,3 +276,56 @@ def test_ml_compress_enabled_end_to_end_via_config():
     config = CompressConfig(ml_compress_enabled=True, retention_threshold=0.5)
     result = compress(messages, model="gpt-4o", config=config)
     assert result.tokens_saved >= 0
+
+
+# ---------------------------------------------------------------------------
+# Regression: list-content messages (Anthropic content blocks, etc.)
+# ---------------------------------------------------------------------------
+
+
+def test_compress_list_content_messages_no_crash():
+    """Messages with list-based content (Anthropic multi-block format)
+    must not crash the pipeline. Previously ``.strip()`` was called on
+    list objects in several code paths, producing the 502 error:
+    "'list' object has no attribute 'strip'"."""
+    messages = [
+        {"role": "user", "content": "Explain authentication"},
+        {
+            "role": "assistant",
+            "content": [
+                {"type": "text", "text": "Authentication uses JWT tokens. " * 10},
+                {"type": "text", "text": "The token includes user ID and expiry. " * 8},
+            ],
+        },
+        {"role": "user", "content": "Show me the code"},
+    ]
+    config = CompressConfig()
+    result = compress(messages, model="gpt-4o", config=config)
+    # Pipeline must not crash and should produce non-negative savings
+    assert result.tokens_saved >= 0
+    # Original message structure is preserved (list content stays as list)
+    assert isinstance(result.messages[1]["content"], list), (
+        f"List content was replaced with {type(result.messages[1]['content'])}"
+    )
+
+
+def test_compress_mixed_string_and_list_content():
+    """Pipeline handles a mix of string and list content without crashing."""
+    messages = [
+        {"role": "user", "content": "Hello"},
+        {
+            "role": "assistant",
+            "content": [
+                {"type": "text", "text": "Hi there! " * 15},
+                {"type": "tool_use", "id": "tu1", "name": "Read", "input": {"path": "auth.py"}},
+            ],
+        },
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "Please show me the file content"},
+            ],
+        },
+    ]
+    result = compress(messages, model="gpt-4o")
+    assert result.tokens_saved >= 0

@@ -18,6 +18,11 @@ class LosslessResult:
     metadata: dict[str, Any] = field(default_factory=dict)
 
 
+# Pre-compiled regex patterns
+_ANSI_PATTERN = re.compile(r"\x1b\[[0-9;]*[a-zA-Z]")
+_SEARCH_HEADINGS_PATTERN = re.compile(r"^(\S+):(\d+):(.*)")
+
+
 def compact_lossless(
     content: str, content_hint: str = "text"
 ) -> LosslessResult:
@@ -59,7 +64,7 @@ def compact_lossless(
 
 def _strip_ansi(text: str) -> str:
     """Remove ANSI escape sequences."""
-    return re.sub(r"\x1b\[[0-9;]*[a-zA-Z]", "", text)
+    return _ANSI_PATTERN.sub("", text)
 
 
 def _collapse_runs(text: str, max_repeats: int = 5) -> str:
@@ -94,7 +99,7 @@ def _compress_search_headings(text: str) -> str:
     result = []
 
     for line in lines:
-        match = re.match(r"^(\S+):(\d+):(.*)", line)
+        match = _SEARCH_HEADINGS_PATTERN.match(line)
         if match:
             filepath = match.group(1)
             line_num = match.group(2)
@@ -123,13 +128,16 @@ def _compress_search_headings(text: str) -> str:
     return "\n".join(result)
 
 
+_DIFF_INDEX_LINE = re.compile(r"^index [0-9a-f]{4,40}\.\.[0-9a-f]{4,40}(\s+\d+)?$")
+
+
 def _strip_diff_index(text: str) -> str:
-    """Remove git diff index lines."""
+    """Remove git diff `index <sha>..<sha>` lines."""
     lines = text.split("\n")
     result = []
 
     for line in lines:
-        if line.startswith("index ") and ".." in line:
+        if _DIFF_INDEX_LINE.match(line):
             continue
         result.append(line)
 

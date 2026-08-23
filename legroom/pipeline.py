@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import re
 from collections import OrderedDict
 from typing import Any
 
@@ -15,6 +16,7 @@ from .compressors.smart_crusher import SmartCrusher, SmartCrusherConfig
 from .compressors.adaptive_sizer import compute_optimal_k
 from .cross_turn_dedup import DedupBlock, dedup_blocks
 from .compressors.recursive_json import route_embedded_json
+from .compressors.content_detector import ContentDetector
 from .compressors.lossless_compaction import compact_lossless
 from .read_lifecycle import classify_reads, ReadLifecycleConfig, ReadLifecycleResult
 from .output.shaper import OutputShaper
@@ -30,9 +32,12 @@ class ContentHashCache:
 
     Used by CompressPhase to avoid re-compressing identical content
     across messages and across pipeline invocations.
+    
+    Default size is 2048 entries for better hit rates in proxy mode
+    where the same tool outputs repeat frequently.
     """
 
-    def __init__(self, maxsize: int = 512) -> None:
+    def __init__(self, maxsize: int = 2048) -> None:
         self._cache: OrderedDict[str, str] = OrderedDict()
         self._maxsize = maxsize
         self._hits = 0
@@ -104,6 +109,7 @@ class CompressPhase:
             ml_min_compression_ratio=ml_min_compression_ratio,
         )
         self._cache = cache or ContentHashCache()
+        self._detector = ContentDetector()
 
     def apply(
         self, messages: list[dict[str, Any]], config: CompressConfig, model: str = "gpt-4o"
@@ -125,27 +131,38 @@ class CompressPhase:
 
                 original_content = content
 
-                # Try lossless compaction first
-                compacted = compact_lossless(content, "text")
+                # Try lossless compaction first. ContentDetector's vocabulary
+                # (json/log/search/code/text) doesn't line up 1:1 with
+                # compact_lossless's (log/grep/diff/text) — map the two
+                # hints that do correspond so the log/grep-specific
+                # transforms actually get a chance to run instead of always
+                # falling through to the hardcoded "text" no-op branch.
+                detected = self._detector.detect(content)
+                lossless_hint = "grep" if detected == "search" else detected
+                compacted = compact_lossless(content, lossless_hint)
                 if compacted.transforms_applied:
                     content = compacted.compressed
 
                 # Route through content router with model
-                compressed = self._router.compress(
+                compressor_output = self._router.compress(
                     content, source_hint="text", model=model, query_terms=query_terms
                 )
-                if compressed and compressed.tokens_saved > 0:
-                    content = compressed.compressed
+                if compressor_output and compressor_output.tokens_saved > 0:
+                    content = compressor_output.compressed
 
-                # Try recursive JSON routing
-                json_result = route_embedded_json(
-                    content,
-                    lambda span: self._router.compress(
-                        span, source_hint="text", model=model, query_terms=query_terms
-                    ),
-                )
-                if json_result is not None:
-                    content = json_result
+                # Try recursive JSON routing — only for plain text.
+                # JSON, code, log, and search content were already
+                # handled by their dedicated compressors above; the
+                # expensive balanced-brace scan would be wasted work.
+                if compressor_output is not None and compressor_output.content_type == "text":
+                    json_result = route_embedded_json(
+                        content,
+                        lambda span: self._router.compress(
+                            span, source_hint="text", model=model, query_terms=query_terms
+                        ),
+                    )
+                    if json_result is not None:
+                        content = json_result
 
                 # Cache the result keyed by the original raw content
                 if content != original_content and not query_terms:
@@ -153,6 +170,9 @@ class CompressPhase:
 
             result.append({**msg, "content": content})
         return result
+
+
+_THINKING_PATTERN = re.compile(r"<think>.*?</think>", re.DOTALL)
 
 
 class ThinkingCompactor:
@@ -165,14 +185,7 @@ class ThinkingCompactor:
             content = msg.get("content", "")
             if isinstance(content, str):
                 # Remove <think>...</think> blocks
-                import re
-                content = re.sub(
-                    r"<think>.*?</think>",
-                    "",
-                    content,
-                    flags=re.DOTALL,
-                )
-                content = content.strip()
+                content = _THINKING_PATTERN.sub("", content).strip()
             result.append({**msg, "content": content})
         return result
 
@@ -291,7 +304,9 @@ class TransformPipeline:
                 ]
                 deduped = dedup_blocks(blocks)
                 for i, block in enumerate(deduped):
-                    if i < len(current_messages):
+                    if i < len(current_messages) and isinstance(
+                        current_messages[i].get("content", ""), str
+                    ):
                         current_messages[i] = {
                             **current_messages[i],
                             "content": block.content,
@@ -309,6 +324,7 @@ class TransformPipeline:
                     compress_stale=getattr(config, "compress_stale", True),
                     compress_superseded=getattr(config, "compress_superseded", True),
                     min_size_bytes=getattr(config, "min_read_lifecycle_bytes", 50),
+                    protect_recent=getattr(config, "protect_recent", 0),
                 )
                 lifecycle_result = classify_reads(
                     current_messages, lifecycle_config, self.compression_store
@@ -343,11 +359,14 @@ class TransformPipeline:
 
         # Phase 5: CCR tool injection
         if self.ccr_enabled:
-            injector = CCRToolInjector(provider="anthropic")
-            injector.scan_for_markers(current_messages)
-            if injector.has_compressed_content:
-                current_messages = injector.inject_system_instructions(current_messages)
-                self._applied_transforms.append("ccr_tool_injection")
+            try:
+                injector = CCRToolInjector(provider="openai")
+                injector.scan_for_markers(current_messages)
+                if injector.has_compressed_content:
+                    current_messages = injector.inject_system_instructions(current_messages)
+                    self._applied_transforms.append("ccr_tool_injection")
+            except Exception as e:
+                logger.warning(f"CCRToolInjector failed: {e}")
 
         tokens_after = count_tokens_messages(current_messages, model)
 
@@ -408,6 +427,15 @@ def create_default_pipeline(
     )
 
 
+# Pre-compiled regex patterns (compiled once at module load)
+_UUID_PATTERN = re.compile(
+    r"\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b"
+)
+_ISO_PATTERN = re.compile(
+    r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})?"
+)
+
+
 class CacheAligner:
     """Detects volatile content that busts KV cache alignment."""
 
@@ -418,27 +446,23 @@ class CacheAligner:
 
     def apply(self, messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
         """Apply cache alignment — replace volatile tokens with placeholders."""
-        import re
         import uuid
 
         result = []
         for msg in messages:
             content = msg.get("content", "")
             if isinstance(content, str):
-                # Replace UUIDs with fixed placeholder
-                uuid_pattern = re.compile(
-                    r"\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b"
-                )
-                if uuid_pattern.search(content):
-                    content = uuid_pattern.sub("[UUID_PLACEHOLDER]", content)
+                # Fast pre-check: skip regex if content doesn't look like
+                # it contains UUIDs or ISO timestamps
+                has_uuid = "-" in content and any(c in content for c in "abcdef0123456789")
+                has_iso = "T" in content and "-" in content[:11]
+
+                if has_uuid and _UUID_PATTERN.search(content):
+                    content = _UUID_PATTERN.sub("[UUID_PLACEHOLDER]", content)
                     self._metrics["detected"] += 1
 
-                # Replace ISO timestamps
-                iso_pattern = re.compile(
-                    r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})?"
-                )
-                if iso_pattern.search(content):
-                    content = iso_pattern.sub("[TIMESTAMP_PLACEHOLDER]", content)
+                if has_iso and _ISO_PATTERN.search(content):
+                    content = _ISO_PATTERN.sub("[TIMESTAMP_PLACEHOLDER]", content)
                     self._metrics["detected"] += 1
 
                 self._metrics["aligned"] += 1

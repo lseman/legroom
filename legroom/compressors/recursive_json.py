@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
-import re
 import json
 from typing import Callable
+
+from .balanced_end import find_balanced_end, _HAS_NUMBA
 
 
 def route_embedded_json(
@@ -49,21 +50,32 @@ def route_embedded_json(
 
 
 def _find_json_spans(text: str) -> list[tuple[int, int]]:
-    """Find balanced JSON spans in text."""
+    """Find balanced JSON spans in text with fast pre-filters.
+
+    Two pre-filters skip expensive balanced-end scan + json.loads:
+      1. Previous char is a letter or '$' — likely code/templating, not JSON.
+      2. Balanced-end scan capped at 8 KB — real JSON is rarely larger.
+    """
     spans = []
     i = 0
+    n = len(text)
+    MAX_JSON_SCAN = 8192
 
-    while i < len(text):
-        if text[i] in "{[":
-            # Found potential JSON start
-            start = i
-            end = _find_balanced_end(text, i)
+    while i < n:
+        c = text[i]
+        if c in "{}[":
+            # Code/templating pre-filter: skip positions preceded by letters
+            # or '$' (e.g. "def foo{bar}", "${x}")
+            if i > 0 and (text[i - 1].isalpha() or text[i - 1] == "$"):
+                i += 1
+                continue
+
+            end = find_balanced_end(text, i, max_scan=MAX_JSON_SCAN)
             if end is not None:
-                span = text[start:end]
-                # Verify it's valid JSON
+                span = text[i:end]
                 try:
                     json.loads(span)
-                    spans.append((start, end))
+                    spans.append((i, end))
                     i = end
                     continue
                 except (json.JSONDecodeError, ValueError):
@@ -71,46 +83,6 @@ def _find_json_spans(text: str) -> list[tuple[int, int]]:
         i += 1
 
     return spans
-
-
-def _find_balanced_end(text: str, start: int) -> int | None:
-    """Find the end of a balanced JSON span starting at start."""
-    if start >= len(text):
-        return None
-
-    open_char = text[start]
-    close_char = "{" if open_char == "{" else "}"
-
-    depth = 0
-    in_string = False
-    escape_next = False
-
-    for i in range(start, len(text)):
-        c = text[i]
-
-        if escape_next:
-            escape_next = False
-            continue
-
-        if c == "\\":
-            escape_next = True
-            continue
-
-        if c == '"' and not escape_next:
-            in_string = not in_string
-            continue
-
-        if in_string:
-            continue
-
-        if c == open_char:
-            depth += 1
-        elif c == close_char:
-            depth -= 1
-            if depth == 0:
-                return i + 1
-
-    return None
 
 
 def _has_ccr_markers(text: str) -> bool:

@@ -1,217 +1,90 @@
-#!/usr/bin/env python
-"""Benchmark harness — measures legroom's compression on realistic message traces.
-
-Usage:
-    python benchmarks/run_benchmark.py
-    python benchmarks/run_benchmark.py --fixtures benchmarks/fixtures --model gpt-4o
-    python benchmarks/run_benchmark.py --json > results.json
-
-Fixtures are JSON files of the form {"description": str, "messages": [...]}.
-Each fixture is compressed with legroom's default pipeline; token counts,
-per-transform application, and latency are reported per-fixture and in
-aggregate. If the `headroom` package is importable, its compression is run
-on the same fixtures for a side-by-side comparison — otherwise that column
-is omitted rather than faked.
-"""
-
-from __future__ import annotations
-
-import argparse
-import json
-import sys
+"""Benchmark script to measure legroom compression performance."""
 import time
-from dataclasses import dataclass, field
-from pathlib import Path
-from typing import Any
+import sys
+sys.path.insert(0, '/home/seman/logician/legroom')
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+# Generate realistic test data
+messages = []
+messages.append({"role": "system", "content": "You are a helpful assistant."})
+messages.append({"role": "user", "content": "Analyze these search results for 'machine learning optimization techniques' and summarize the key findings."})
 
-from legroom import compress, CompressConfig  # noqa: E402
+for i in range(50):
+    parts = []
+    parts.append("Search result " + str(i) + ":")
+    parts.append("Title: " + ("Optimization Technique " + str(i) + " ") * 5)
+    parts.append("Abstract: This paper explores advanced machine learning optimization techniques including gradient descent variants, learning rate scheduling, and adaptive moment estimation. We demonstrate that combining AdamW with cyclical learning rates and warmup schedules yields 15-30% improvement in convergence speed on transformer models.")
+    for j in range(10):
+        parts.append("Key findings: Method A achieved " + str(i * 0.1 * j) + "% accuracy.")
+    parts.append("Method B showed " + str(i * 0.05) + "% improvement on validation set.")
+    parts.append("References: [1] Smith et al., 2024. [2] Johnson & Lee, 2023. [3] Wang et al., 2024.")
+    messages.append({"role": "user", "content": "\n".join(parts)})
 
+code_snippet = """def optimize(model, data, lr=0.001, epochs=100):
+    optimizer = AdamW(model.parameters(), lr=lr, weight_decay=0.01)
+    scheduler = CosineAnnealingWarmRestarts(optimizer, T_0=10, T_mult=2)
+    best_loss = float('inf')
+    for epoch in range(epochs):
+        model.train()
+        for batch in data:
+            optimizer.zero_grad()
+            loss = model(batch).loss()
+            loss.backward()
+            optimizer.step()
+            scheduler.step()
+        if loss < best_loss:
+            best_loss = loss
+    return best_loss"""
 
-@dataclass
-class FixtureResult:
-    name: str
-    description: str
-    tokens_before: int
-    tokens_after: int
-    latency_ms: float
-    transforms_applied: list[str]
-    headroom_tokens_after: int | None = None
-    headroom_latency_ms: float | None = None
+for i in range(30):
+    parts = ["Turn " + str(i) + ": Based on search results " + str(i*2) + "-" + str(i*2+2) + "."]
+    parts.append("The key optimization technique that stands out is **adaptive learning rate scheduling**.")
+    parts.append("```python")
+    parts.append(code_snippet)
+    parts.append("```")
+    parts.append("This implementation uses AdamW with cosine annealing warm restarts.")
+    messages.append({"role": "assistant", "content": "\n".join(parts)})
 
-    @property
-    def tokens_saved(self) -> int:
-        return self.tokens_before - self.tokens_after
+for i in range(20):
+    parts = ["Turn " + str(i) + ": Here's my analysis of the optimization techniques."]
+    parts.append("The evidence strongly suggests that **adaptive learning rate methods** combined with **gradient clipping** provide the most consistent improvements across different model architectures.")
+    parts.append("Additionally, the combination of weight decay with adaptive methods (as in AdamW) appears to be critical for generalization.")
+    messages.append({"role": "assistant", "content": "\n".join(parts)})
 
-    @property
-    def ratio(self) -> float:
-        if self.tokens_before == 0:
-            return 0.0
-        return self.tokens_saved / self.tokens_before
+from legroom import compress
+from legroom.compressors.balanced_end import _HAS_NUMBA
 
+# Warm up
+compress(messages[:5], model="gpt-4o")
 
-def _load_fixtures(fixtures_dir: Path) -> list[tuple[str, dict[str, Any]]]:
-    fixtures = []
-    for path in sorted(fixtures_dir.glob("*.json")):
-        with open(path) as f:
-            data = json.load(f)
-        fixtures.append((path.stem, data))
-    return fixtures
+# Benchmark (5 runs)
+times = []
+for run in range(5):
+    t0 = time.perf_counter()
+    result = compress(messages, model="gpt-4o")
+    t1 = time.perf_counter()
+    times.append(t1 - t0)
 
+avg_time = sum(times) / len(times)
 
-def _try_headroom_compress(messages: list[dict[str, Any]], model: str) -> tuple[int, float] | None:
-    """Run headroom's compressor on the same messages, if installed.
-
-    Returns (tokens_after, latency_ms) or None if headroom isn't available
-    or its API doesn't match what we expect. We do not guess at an API
-    that may not exist — absence just means the comparison is skipped.
-    """
-    try:
-        import headroom  # type: ignore
-    except ImportError:
-        return None
-
-    for attr in ("compress", "optimize"):
-        fn = getattr(headroom, attr, None)
-        if callable(fn):
-            start = time.perf_counter()
-            try:
-                result = fn(messages, model=model)
-            except TypeError:
-                result = fn(messages)
-            latency_ms = (time.perf_counter() - start) * 1000
-
-            for tok_attr in ("tokens_after", "compressed_token_count", "token_count"):
-                tokens_after = getattr(result, tok_attr, None)
-                if tokens_after is not None:
-                    return int(tokens_after), latency_ms
-    return None
-
-
-def run_benchmark(fixtures_dir: Path, model: str, config: CompressConfig) -> list[FixtureResult]:
-    results = []
-    for name, fixture in _load_fixtures(fixtures_dir):
-        messages = fixture["messages"]
-        description = fixture.get("description", "")
-
-        start = time.perf_counter()
-        result = compress([dict(m) for m in messages], model=model, config=config)
-        latency_ms = (time.perf_counter() - start) * 1000
-
-        headroom_result = _try_headroom_compress([dict(m) for m in messages], model)
-
-        results.append(
-            FixtureResult(
-                name=name,
-                description=description,
-                tokens_before=result.tokens_before,
-                tokens_after=result.tokens_after,
-                latency_ms=latency_ms,
-                transforms_applied=result.transforms_applied,
-                headroom_tokens_after=headroom_result[0] if headroom_result else None,
-                headroom_latency_ms=headroom_result[1] if headroom_result else None,
-            )
-        )
-    return results
-
-
-def _fmt_pct(ratio: float) -> str:
-    return f"{ratio * 100:.1f}%"
-
-
-def print_report(results: list[FixtureResult]) -> None:
-    headroom_available = any(r.headroom_tokens_after is not None for r in results)
-
-    name_w = max(len(r.name) for r in results) + 2
-    header = f"{'fixture':<{name_w}}{'before':>8}{'after':>8}{'saved':>8}{'ratio':>8}{'ms':>8}"
-    if headroom_available:
-        header += f"{'hr_after':>10}{'hr_ratio':>10}"
-    print(header)
-    print("-" * len(header))
-
-    for r in results:
-        row = (
-            f"{r.name:<{name_w}}{r.tokens_before:>8}{r.tokens_after:>8}"
-            f"{r.tokens_saved:>8}{_fmt_pct(r.ratio):>8}{r.latency_ms:>8.2f}"
-        )
-        if headroom_available:
-            if r.headroom_tokens_after is not None:
-                hr_ratio = (
-                    (r.tokens_before - r.headroom_tokens_after) / r.tokens_before
-                    if r.tokens_before
-                    else 0.0
-                )
-                row += f"{r.headroom_tokens_after:>10}{_fmt_pct(hr_ratio):>10}"
-            else:
-                row += f"{'—':>10}{'—':>10}"
-        print(row)
-
-    total_before = sum(r.tokens_before for r in results)
-    total_after = sum(r.tokens_after for r in results)
-    total_saved = total_before - total_after
-    total_ratio = total_saved / total_before if total_before else 0.0
-    avg_latency = sum(r.latency_ms for r in results) / len(results) if results else 0.0
-
-    print("-" * len(header))
-    total_row = (
-        f"{'TOTAL':<{name_w}}{total_before:>8}{total_after:>8}"
-        f"{total_saved:>8}{_fmt_pct(total_ratio):>8}{avg_latency:>8.2f}"
-    )
-    print(total_row)
-
-    if not headroom_available:
-        print(
-            "\n(headroom not installed — comparison columns omitted; "
-            "install it and re-run to see a side-by-side)"
-        )
-
-    print("\nTransforms applied per fixture:")
-    for r in results:
-        print(f"  {r.name}: {', '.join(r.transforms_applied) or '(none)'}")
-
-
-def main() -> None:
-    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument(
-        "--fixtures",
-        type=Path,
-        default=Path(__file__).parent / "fixtures",
-        help="Directory of fixture JSON files (default: benchmarks/fixtures)",
-    )
-    parser.add_argument("--model", default="gpt-4o", help="Model name for token counting")
-    parser.add_argument("--json", action="store_true", help="Emit machine-readable JSON instead of a table")
-    args = parser.parse_args()
-
-    if not args.fixtures.is_dir():
-        parser.error(f"fixtures directory not found: {args.fixtures}")
-
-    config = CompressConfig()
-    results = run_benchmark(args.fixtures, args.model, config)
-
-    if not results:
-        parser.error(f"no *.json fixtures found in {args.fixtures}")
-
-    if args.json:
-        payload = [
-            {
-                "name": r.name,
-                "description": r.description,
-                "tokens_before": r.tokens_before,
-                "tokens_after": r.tokens_after,
-                "tokens_saved": r.tokens_saved,
-                "ratio": r.ratio,
-                "latency_ms": r.latency_ms,
-                "transforms_applied": r.transforms_applied,
-                "headroom_tokens_after": r.headroom_tokens_after,
-                "headroom_latency_ms": r.headroom_latency_ms,
-            }
-            for r in results
-        ]
-        print(json.dumps(payload, indent=2))
-    else:
-        print_report(results)
-
-
-if __name__ == "__main__":
-    main()
+print("=" * 60)
+print("LEGROOM COMPRESSION BENCHMARK")
+print("=" * 60)
+print("Messages: {}".format(len(messages)))
+print("Tokens before: {:,}".format(result.tokens_before))
+print("Tokens after: {:,}".format(result.tokens_after))
+print("Compression ratio: {:.2%}".format(result.tokens_after / result.tokens_before))
+print("Tokens saved: {:,} ({:.1f}%)".format(
+    result.tokens_saved,
+    (1 - result.tokens_after / result.tokens_before) * 100
+))
+print("Transforms applied:", result.transforms_applied)
+print("Warnings:", result.warnings)
+print("=" * 60)
+print("Performance:")
+print("  Time (5 runs):")
+for t in times:
+    print("    {:.3f}s".format(t))
+print("  Average: {:.3f}s".format(avg_time))
+print("  Tokens/sec: {:,}".format(int(result.tokens_before / avg_time)))
+print("  Numba available: {}".format(_HAS_NUMBA))
+print("=" * 60)

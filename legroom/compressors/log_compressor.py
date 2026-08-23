@@ -49,10 +49,10 @@ class LogCompressor:
                 skip_count -= 1
                 continue
 
-            if line in repeated and i + repeated[line] <= len(lines):
-                # Check if this is a run of identical lines
+            if line in repeated:
+                # Count the full run of consecutive identical lines starting here.
                 run_length = 0
-                for j in range(i, min(i + len(repeated), len(lines))):
+                for j in range(i, len(lines)):
                     if lines[j] == line:
                         run_length += 1
                     else:

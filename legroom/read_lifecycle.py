@@ -35,7 +35,11 @@ _READ_TOOL_NAMES = frozenset({"Read", "read", "read_file"})
 
 # Tool names that mutate files (make previous Reads stale)
 _MUTATING_TOOL_NAMES = frozenset(
-    {"Edit", "edit", "Write", "write", "MultiEdit", "NotebookEdit", "apply_patch"}
+    {
+        "Edit", "edit", "edit_file",
+        "Write", "write", "write_file",
+        "MultiEdit", "NotebookEdit", "apply_patch",
+    }
 )
 
 
@@ -80,6 +84,7 @@ class ReadLifecycleConfig:
     compress_stale: bool = True
     compress_superseded: bool = True
     min_size_bytes: int = 50  # Skip replacing tiny outputs
+    protect_recent: int = 0  # Never compress a Read in the last N messages
 
 
 @dataclass
@@ -125,8 +130,14 @@ def classify_reads(
     # Phase 2: Build file operation index
     file_ops = _build_file_operation_index(messages, tool_metadata)
 
-    # Phase 3: Classify each Read
-    classifications = _classify_reads(file_ops, config)
+    # Phase 3: Classify each Read. Reads inside the protected tail are never
+    # eligible for compression, regardless of stale/superseded status — the
+    # model may need their exact content (e.g. as `old_string` for an edit)
+    # on the very next turn.
+    protected_from = (
+        len(messages) - config.protect_recent if config.protect_recent > 0 else None
+    )
+    classifications = _classify_reads(file_ops, config, protected_from)
 
     if not classifications:
         return ReadLifecycleResult(
@@ -292,8 +303,13 @@ def _read_covers(later: FileOperation, earlier: FileOperation) -> bool:
 def _classify_reads(
     file_ops: dict[str, list[FileOperation]],
     config: ReadLifecycleConfig,
+    protected_from: Optional[int] = None,
 ) -> list[ReadClassification]:
-    """Classify each Read as fresh, stale, or superseded."""
+    """Classify each Read as fresh, stale, or superseded.
+
+    protected_from: reads at or after this message index are always FRESH,
+    win over stale/superseded status.
+    """
     classifications: list[ReadClassification] = []
 
     for file_path, ops in file_ops.items():
@@ -304,6 +320,18 @@ def _classify_reads(
             continue
 
         for read_op in reads:
+            if protected_from is not None and read_op.msg_index >= protected_from:
+                classifications.append(
+                    ReadClassification(
+                        msg_index=read_op.msg_index,
+                        tool_call_id=read_op.tool_call_id,
+                        file_path=file_path,
+                        state=ReadState.FRESH,
+                        content_size=read_op.content_size,
+                    )
+                )
+                continue
+
             # Check stale: any edit/write after this read?
             is_stale = config.compress_stale and any(
                 e.msg_index > read_op.msg_index for e in edits
