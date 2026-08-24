@@ -13,6 +13,7 @@ from .ccr.compression_store import CompressionStore
 from .ccr.tool_injection import CCRToolInjector
 from .compressors.compressor_registry import _compute_salience
 from .compressors.content_detector import ContentDetector
+from .compressors.models import apply_profile
 from .compressors.content_router import ContentRouter
 from .compressors.lossless_compaction import compact_lossless
 from .compressors.recursive_json import route_embedded_json
@@ -340,6 +341,11 @@ class TransformPipeline:
 
         tokens_before = count_tokens_messages(messages, model)
         config = config or CompressConfig()
+
+        # Apply model-specific compression profile (only if user didn't
+        # explicitly override the setting — detect by comparing against
+        # CompressConfig defaults).
+        config = apply_profile(model, config)
 
         # Compute salience scores before compression
         if getattr(config, "track_salience", True):
