@@ -73,7 +73,7 @@ def test_destructive_cache_alignment_is_opt_in():
             "content": "UUID 550e8400-e29b-41d4-a716-446655440000",
         }
     ]
-    result = compress(messages)
+    result = compress(messages, config=CompressConfig(cache_align_enabled=False))
     assert result.messages[0]["content"] == messages[0]["content"]
 
 

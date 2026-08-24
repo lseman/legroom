@@ -11,18 +11,21 @@ class CompressConfig:
     """Configuration for the compression pipeline."""
 
     optimize: bool = True
-    protect_recent: int = 0
+    # Number of recent turns to protect from compression.
+    # The model's immediate context is the most critical for reasoning.
+    protect_recent: int = 3
     verbosity_level: int = 2
     # Threshold for token-level retention (ML compressor)
     retention_threshold: float = 0.5
-    # Minimum compression ratio to accept (0.0 = always accept)
-    min_compression_ratio: float = 0.0
+    # Minimum compression ratio to accept (0.0 = always accept).
+    # Values below 0.15 are usually noise removal, not real compression.
+    min_compression_ratio: float = 0.15
     # Enable/disable specific pipeline phases
-    cache_align_enabled: bool = False
+    cache_align_enabled: bool = True
     compress_enabled: bool = True
     ccr_enabled: bool = True
     output_shaping: bool = False
-    thinking_compact_enabled: bool = False
+    thinking_compact_enabled: bool = True
     cross_turn_dedup_enabled: bool = True
     read_lifecycle_enabled: bool = True
     # Read Lifecycle settings
@@ -39,7 +42,7 @@ class CompressConfig:
     query_aware: bool = True
     # Use compute_optimal_k (SimHash near-dup + Kneedle) to skip summarizing
     # JSON array groups that turn out to be too diverse to benefit from it.
-    adaptive_sizing: bool = False
+    adaptive_sizing: bool = True
     size_bias: float = 1.0
     # Opt-in ML token-retention compression (Kompress-v2-base) for plain-text
     # content. Lossy and requires `pip install legroom[ml]` plus the model
