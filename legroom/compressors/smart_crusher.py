@@ -14,10 +14,9 @@ Improvements over the original:
 
 from __future__ import annotations
 
-import hashlib
 import json
 from collections import defaultdict
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any
 
 from ..query_relevance import query_relevance
@@ -559,8 +558,8 @@ class SmartCrusher:
         strings = [v for v in values if isinstance(v, str)]
         if strings:
             avg_len = sum(len(s) for s in strings) / len(strings)
-            samples = []
-            seen = set()
+            samples: list[str] = []
+            seen: set[str] = set()
             for s in strings:
                 if s not in seen and len(samples) < 2:
                     seen.add(s)

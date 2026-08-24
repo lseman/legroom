@@ -68,6 +68,46 @@ def test_token_counting():
     assert count_tokens_messages([{"role": "user", "content": "test"}], model="gpt-4o") > 0
 
 
+def test_gpt4o_uses_native_encoding():
+    from legroom.tokenizer import get_encoding
+
+    assert get_encoding("gpt-4o").name == "o200k_base"
+
+
+def test_protocol_token_count_includes_tool_payloads_and_framing():
+    from legroom.tokenizer import count_tokens_messages
+
+    plain = [{"role": "assistant", "content": "calling"}]
+    with_tool = [
+        {
+            **plain[0],
+            "tool_calls": [
+                {"id": "call_123", "function": {"name": "lookup", "arguments": '{"q":"x"}'}}
+            ],
+        }
+    ]
+    assert count_tokens_messages(with_tool, protocol="openai_chat") > count_tokens_messages(
+        plain, protocol="openai_chat"
+    )
+    assert count_tokens_messages(plain, protocol="openai_chat") > count_tokens_messages(
+        plain, protocol="content_only"
+    )
+
+    responses = [
+        {
+            "type": "message",
+            "role": "user",
+            "content": [
+                {"type": "input_text", "text": "describe this"},
+                {"type": "input_image", "image_url": "https://example.test/image.png"},
+            ],
+        }
+    ]
+    assert count_tokens_messages(responses) > count_tokens_messages(
+        responses, protocol="content_only"
+    )
+
+
 def test_compress_preserves_errors():
     """Errors in content should be preserved."""
     messages = [

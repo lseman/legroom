@@ -356,6 +356,106 @@ async def test_compression_result_cache_and_prometheus_metrics(monkeypatch: pyte
 
 
 @pytest.mark.asyncio
+async def test_provider_cache_controls_and_usage_metrics():
+    captured: dict = {}
+
+    async def upstream(request: httpx.Request) -> httpx.Response:
+        captured.update(json.loads(await request.aread()))
+        payload = {
+            "usage": {
+                "prompt_tokens": 100,
+                "prompt_tokens_details": {"cached_tokens": 70},
+            }
+        }
+        return httpx.Response(200, stream=_BytesStream(json.dumps(payload).encode()))
+
+    proxy = LegroomProxy(
+        target_url="https://upstream.test",
+        compress_context=False,
+        provider_cache_mode="explicit",
+        provider_cache_ttl="24h",
+    )
+    proxy.app.state.http_client = httpx.AsyncClient(transport=httpx.MockTransport(upstream))
+    body = json.dumps(
+        {"model": "gpt-5.6", "messages": [{"role": "user", "content": "hello"}]}
+    ).encode()
+    try:
+        await proxy._handle_request(_request(body))
+    finally:
+        await proxy.app.state.http_client.aclose()
+
+    assert captured["prompt_cache_key"].startswith("legroom-")
+    assert captured["prompt_cache_retention"] == "24h"
+    metrics = proxy._metrics.render_prometheus()
+    assert "legroom_provider_cache_read_tokens_total 70" in metrics
+    assert "legroom_provider_input_tokens_total 100" in metrics
+
+
+@pytest.mark.asyncio
+async def test_shadow_mode_measures_without_mutating_request(monkeypatch: pytest.MonkeyPatch):
+    original_messages = [{"role": "user", "content": "long original"}]
+    captured: dict = {}
+    result = SimpleNamespace(
+        messages=[{"role": "user", "content": "short"}],
+        tokens_before=10,
+        tokens_after=2,
+        transforms_applied=["compress"],
+        warnings=[],
+        metadata={"phase_reports": []},
+    )
+    monkeypatch.setattr("legroom.proxy.proxy_server.compress", lambda *args, **kwargs: result)
+
+    async def upstream(request: httpx.Request) -> httpx.Response:
+        captured.update(json.loads(await request.aread()))
+        return httpx.Response(200, stream=_BytesStream(b"{}"))
+
+    proxy = LegroomProxy(target_url="https://upstream.test", shadow_mode=True)
+    proxy.app.state.http_client = httpx.AsyncClient(transport=httpx.MockTransport(upstream))
+    try:
+        await proxy._handle_request(_request(json.dumps({"messages": original_messages}).encode()))
+    finally:
+        await proxy.app.state.http_client.aclose()
+
+    assert captured["messages"] == original_messages
+    assert proxy._metrics.shadow_requests == 1
+    assert proxy._metrics.shadow_tokens_potentially_saved == 8
+
+
+@pytest.mark.asyncio
+async def test_quality_failure_rolls_back_candidate(monkeypatch: pytest.MonkeyPatch):
+    original_messages = [{"role": "user", "content": "critical identifier abc123"}]
+    captured: dict = {}
+    result = SimpleNamespace(
+        messages=[{"role": "user", "content": "short"}],
+        tokens_before=10,
+        tokens_after=2,
+        transforms_applied=["compress"],
+        warnings=[],
+        metadata={
+            "phase_reports": [{"name": "Compression", "status": "applied"}]
+        },
+    )
+    monkeypatch.setattr("legroom.proxy.proxy_server.compress", lambda *args, **kwargs: result)
+
+    async def upstream(request: httpx.Request) -> httpx.Response:
+        captured.update(json.loads(await request.aread()))
+        return httpx.Response(200, stream=_BytesStream(b"{}"))
+
+    proxy = LegroomProxy(
+        target_url="https://upstream.test",
+        quality_evaluator=lambda original, candidate: 0.0,
+    )
+    proxy.app.state.http_client = httpx.AsyncClient(transport=httpx.MockTransport(upstream))
+    try:
+        await proxy._handle_request(_request(json.dumps({"messages": original_messages}).encode()))
+    finally:
+        await proxy.app.state.http_client.aclose()
+
+    assert captured["messages"] == original_messages
+    assert proxy._metrics.errors["quality_rollback"] == 1
+
+
+@pytest.mark.asyncio
 async def test_ccr_retry_uses_identity_encoding_and_returns_raw_bytes():
     captured_headers = None
     final = b'{"choices":[{"finish_reason":"stop","message":{"content":"done"}}]}'

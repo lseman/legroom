@@ -2,12 +2,9 @@
 
 from __future__ import annotations
 
-import pytest
-
 from legroom.budget import (
     BudgetCompressor,
     BudgetResult,
-    MODEL_CONTEXT_WINDOWS,
     compress_with_budget,
 )
 from legroom.config import CompressConfig

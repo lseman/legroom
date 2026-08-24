@@ -23,13 +23,10 @@ eliminating redundant token sequences.
 
 from __future__ import annotations
 
-import hashlib
 import logging
 from collections import defaultdict
 from dataclasses import dataclass, field
 from typing import Any
-
-from ..tokenizer import count_tokens
 
 logger = logging.getLogger(__name__)
 
@@ -129,8 +126,14 @@ class KVOptimizer:
             if len(occurrences) < self._min_occurrences:
                 continue
 
-            # Assign a compact pointer to this prefix
-            pointer = f"[prefix_{pointer_counter}]"
+            distinct_indices = sorted({idx for idx, _ in occurrences})
+            if len(distinct_indices) < self._min_occurrences:
+                continue
+            source_index = distinct_indices[0]
+            # Keep references meaningful in the actual prompt. The previous
+            # opaque ``[prefix_N]`` marker depended on metadata that was never
+            # sent to the model.
+            pointer = f"[same prefix as message {source_index}]"
             pointer_counter += 1
             prefix_map[prefix] = pointer
 
@@ -139,26 +142,27 @@ class KVOptimizer:
             # for the model's context window). Deduplicate by message
             # index in case the same message shares the prefix with
             # multiple others.
-            seen_indices: set[int] = set()
-            sorted_occurrences = sorted(
-                (idx, pos) for idx, pos in occurrences
-                if idx not in seen_indices and not seen_indices.add(idx)
-            )
+            sorted_occurrences = [(idx, 0) for idx in distinct_indices]
 
             # Always preserve the earliest message (first in sorted order)
             for msg_idx, _ in sorted_occurrences[1:]:
                 content = optimized[msg_idx].get("content", "")
-                if isinstance(content, str) and content.startswith(prefix):
+                replacement = pointer + content[len(prefix):] if isinstance(content, str) else ""
+                if (
+                    isinstance(content, str)
+                    and content.startswith(prefix)
+                    and len(replacement) < len(content)
+                ):
                     optimized[msg_idx] = {
                         **optimized[msg_idx],
-                        "content": pointer + content[len(prefix):],
+                        "content": replacement,
                     }
 
         # Phase 3: Token-boundary alignment
         aligned_count = 0
         for i, msg in enumerate(optimized):
             content = msg.get("content", "")
-            if isinstance(content, str) and content and not content.startswith("[prefix_"):
+            if isinstance(content, str) and content and not content.startswith("[same prefix as"):
                 aligned = self._align_token_boundary(content, model)
                 if aligned != content:
                     optimized[i] = {**msg, "content": aligned}

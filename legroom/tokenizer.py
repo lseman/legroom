@@ -11,18 +11,20 @@ those, use the provider's own counting API (e.g. Anthropic's
 from __future__ import annotations
 
 import hashlib
+import json
 from collections import OrderedDict
+from threading import RLock
+from typing import Any, Literal
 
 # Use MD5 instead of SHA256 for cache keys — fast enough for token
 # counting (collision risk is negligible for this use case) and ~2x faster.
 _hash_func = hashlib.md5
-from typing import Any
 
 import tiktoken
 
 _MODEL_TO_ENCODING: dict[str, str] = {
-    "gpt-4o": "cl100k_base",
-    "gpt-4o-mini": "cl100k_base",
+    "gpt-4o": "o200k_base",
+    "gpt-4o-mini": "o200k_base",
     "gpt-4": "cl100k_base",
     "gpt-3.5-turbo": "cl100k_base",
     # Approximated via cl100k_base — see module docstring.
@@ -49,22 +51,25 @@ class _TokenCache:
         self._maxsize = maxsize
         self._hits = 0
         self._misses = 0
+        self._lock = RLock()
 
     def get(self, key: str) -> int | None:
-        if key in self._cache:
-            self._cache.move_to_end(key)
-            self._hits += 1
-            return self._cache[key]
-        self._misses += 1
-        return None
+        with self._lock:
+            if key in self._cache:
+                self._cache.move_to_end(key)
+                self._hits += 1
+                return self._cache[key]
+            self._misses += 1
+            return None
 
     def put(self, key: str, value: int) -> None:
-        if key in self._cache:
-            self._cache.move_to_end(key)
-        else:
-            if len(self._cache) >= self._maxsize:
-                self._cache.popitem(last=False)
-            self._cache[key] = value
+        with self._lock:
+            if key in self._cache:
+                self._cache.move_to_end(key)
+            else:
+                if len(self._cache) >= self._maxsize:
+                    self._cache.popitem(last=False)
+                self._cache[key] = value
 
     @property
     def hits(self) -> int:
@@ -82,7 +87,8 @@ class _TokenCache:
         return self._hits / total
 
     def clear(self) -> None:
-        self._cache.clear()
+        with self._lock:
+            self._cache.clear()
 
 
 # Module-level singleton cache
@@ -93,8 +99,11 @@ def get_encoding(model: str) -> tiktoken.Encoding:
     """Get the encoding for a model."""
     if model in _MODEL_TO_ENCODING_OBJ:
         return _MODEL_TO_ENCODING_OBJ[model]
-    encoding_name = _MODEL_TO_ENCODING.get(model, "cl100k_base")
-    enc = tiktoken.get_encoding(encoding_name)
+    try:
+        enc = tiktoken.encoding_for_model(model)
+    except KeyError:
+        encoding_name = _MODEL_TO_ENCODING.get(model, "cl100k_base")
+        enc = tiktoken.get_encoding(encoding_name)
     _MODEL_TO_ENCODING_OBJ[model] = enc
     return enc
 
@@ -128,15 +137,60 @@ def count_tokens(text: str, model: str = "gpt-4o") -> int:
     return result
 
 
-def count_tokens_messages(messages: list[dict[str, Any]], model: str = "gpt-4o") -> int:
-    """Count tokens in a list of messages."""
-    total = 0
+TokenProtocol = Literal["auto", "openai_chat", "openai_responses", "content_only"]
+
+
+def _detect_protocol(messages: list[dict[str, Any]]) -> TokenProtocol:
+    if any(message.get("type") == "message" for message in messages):
+        return "openai_responses"
+    return "openai_chat"
+
+
+def count_tokens_messages(
+    messages: list[dict[str, Any]],
+    model: str = "gpt-4o",
+    *,
+    protocol: TokenProtocol = "auto",
+) -> int:
+    """Estimate complete request-message tokens for a provider protocol.
+
+    The estimator counts framing, roles, structured content, tool calls, and
+    tool-call identifiers. It remains an estimate because providers may apply
+    private serialization and image/audio tokenization rules.
+    """
+    resolved_protocol = _detect_protocol(messages) if protocol == "auto" else protocol
+    framing_per_message = 3 if resolved_protocol in {"openai_chat", "openai_responses"} else 0
+    total = 3 if framing_per_message and messages else 0
     for msg in messages:
+        total += framing_per_message
+        role = msg.get("role")
+        if isinstance(role, str) and resolved_protocol != "content_only":
+            total += count_tokens(role, model)
         content = msg.get("content", "")
         if isinstance(content, str):
             total += count_tokens(content, model)
         elif isinstance(content, list):
             for block in content:
-                if isinstance(block, dict) and block.get("type") == "text":
-                    total += count_tokens(block.get("text", ""), model)
+                if isinstance(block, dict) and isinstance(block.get("text"), str):
+                    total += count_tokens(block["text"], model)
+                    remainder = {key: value for key, value in block.items() if key != "text"}
+                    if remainder and resolved_protocol != "content_only":
+                        total += count_tokens(
+                            json.dumps(remainder, sort_keys=True, separators=(",", ":")), model
+                        )
+                elif resolved_protocol != "content_only":
+                    total += count_tokens(
+                        json.dumps(block, sort_keys=True, separators=(",", ":")), model
+                    )
+        if resolved_protocol != "content_only":
+            for key in ("name", "tool_call_id", "call_id"):
+                value = msg.get(key)
+                if isinstance(value, str):
+                    total += count_tokens(value, model)
+            for key in ("tool_calls", "function_call"):
+                value = msg.get(key)
+                if value is not None:
+                    total += count_tokens(
+                        json.dumps(value, sort_keys=True, separators=(",", ":")), model
+                    )
     return total

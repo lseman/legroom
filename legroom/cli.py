@@ -7,6 +7,8 @@ import json
 import sys
 from pathlib import Path
 
+from .provider_cache import CacheMode, CachePricing
+
 
 def compress_stdin(
     input_file: str = "-",
@@ -58,6 +60,13 @@ def run_proxy(
     api_key: str | None = None,
     compress_context: bool = True,
     mode: str = "token",
+    provider_cache_mode: CacheMode = "off",
+    provider_cache_key: str | None = None,
+    provider_cache_ttl: str | None = None,
+    shadow_mode: bool = False,
+    uncached_input_price: float = 0.0,
+    cache_write_price: float = 0.0,
+    cache_read_price: float = 0.0,
 ) -> None:
     """Start the FastAPI proxy server with dashboard."""
     import uvicorn
@@ -69,6 +78,15 @@ def run_proxy(
         api_key=api_key,
         compress_context=compress_context,
         mode=mode,
+        provider_cache_mode=provider_cache_mode,
+        provider_cache_key=provider_cache_key,
+        provider_cache_ttl=provider_cache_ttl,
+        shadow_mode=shadow_mode,
+        cache_pricing=CachePricing(
+            uncached_input=uncached_input_price,
+            cache_write=cache_write_price,
+            cache_read=cache_read_price,
+        ),
     )
 
     key_display = "(set via --api-key or OPENAI_API_KEY)" if proxy.api_key else "(not set — requests will fail)"
@@ -114,6 +132,33 @@ def main() -> None:
         "--mode", choices=("token", "cache"), default="token",
         help="Compression mode: token rewrites history; cache freezes prior items",
     )
+    proxy_parser.add_argument(
+        "--uncached-input-price", type=float, default=0.0, help="USD per million tokens"
+    )
+    proxy_parser.add_argument(
+        "--cache-write-price", type=float, default=0.0, help="USD per million tokens"
+    )
+    proxy_parser.add_argument(
+        "--cache-read-price", type=float, default=0.0, help="USD per million tokens"
+    )
+    proxy_parser.add_argument(
+        "--provider-cache",
+        choices=("off", "implicit", "explicit"),
+        default="off",
+        help="Add provider prompt-cache controls without overriding caller fields",
+    )
+    proxy_parser.add_argument("--prompt-cache-key", default=None)
+    proxy_parser.add_argument(
+        "--prompt-cache-ttl",
+        choices=("24h",),
+        default=None,
+        help="OpenAI extended prompt-cache retention",
+    )
+    proxy_parser.add_argument(
+        "--shadow-mode",
+        action="store_true",
+        help="Measure compression and quality without mutating outbound context",
+    )
 
     args = parser.parse_args()
 
@@ -125,6 +170,13 @@ def main() -> None:
             api_key=args.api_key,
             compress_context=not getattr(args, "no_compress", False),
             mode=args.mode,
+            provider_cache_mode=args.provider_cache,
+            provider_cache_key=args.prompt_cache_key,
+            provider_cache_ttl=args.prompt_cache_ttl,
+            shadow_mode=args.shadow_mode,
+            uncached_input_price=args.uncached_input_price,
+            cache_write_price=args.cache_write_price,
+            cache_read_price=args.cache_read_price,
         )
     else:
         # Default: compress mode (for backwards compatibility)

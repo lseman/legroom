@@ -9,6 +9,7 @@ import pytest
 from legroom import CompressConfig, compress
 from legroom.ccr.compression_store import CompressionStore
 from legroom.ccr.marker_resolution import parse_markers
+from legroom.compressors.kv_cache_optimizer import KVOptimizer
 from legroom.pipeline import TransformPipeline
 from legroom.proxy.protocols import compression_view
 from legroom.proxy.proxy_state import ProxyState
@@ -154,3 +155,37 @@ def test_fail_open_pipeline_reports_phase_and_exception(monkeypatch: pytest.Monk
     monkeypatch.setattr(pipeline.compressor, "apply", fail)
     result = pipeline.apply([{"role": "user", "content": "hello"}])
     assert result.warnings == ["Compression failed: RuntimeError: broken compressor"]
+
+
+def test_model_profile_does_not_override_explicit_config(monkeypatch: pytest.MonkeyPatch):
+    pipeline = TransformPipeline(
+        cache_align_enabled=False,
+        cross_turn_dedup_enabled=False,
+        thinking_compact_enabled=False,
+        ccr_enabled=False,
+    )
+    observed: list[int] = []
+
+    def capture(messages, config, *, model):
+        observed.append(config.protect_recent)
+        return messages
+
+    monkeypatch.setattr(pipeline.compressor, "apply", capture)
+    pipeline.apply(
+        [{"role": "user", "content": "hello"}],
+        model="gpt-4o",
+        config=CompressConfig(protect_recent=0, read_lifecycle_enabled=False),
+    )
+    assert observed == [0]
+
+
+def test_kv_prefix_pointer_is_resolvable_from_prompt():
+    prefix = "shared prefix " * 20
+    result = KVOptimizer(min_prefix_bytes=20).optimize(
+        [
+            {"role": "user", "content": prefix + "first"},
+            {"role": "assistant", "content": prefix + "second"},
+        ]
+    )
+    assert result.messages[1]["content"].startswith("[same prefix as message 0]")
+    assert "[prefix_" not in result.messages[1]["content"]

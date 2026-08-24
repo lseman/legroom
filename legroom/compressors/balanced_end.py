@@ -8,6 +8,7 @@ This replaces the Python version with a Numba JIT-compiled version that:
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 
 logger = logging.getLogger(__name__)
 
@@ -120,7 +121,7 @@ def _find_balanced_end_python(text: str, start: int, max_scan: int = 2**30) -> i
 
 
 # Pre-compile the balanced-end finder
-def _get_balanced_end_finder() -> callable:
+def _get_balanced_end_finder() -> Callable[[str, int, int], int | None]:
     """Get the best available balanced-end finder."""
     if _HAS_NUMBA:
         # Warm up the JIT

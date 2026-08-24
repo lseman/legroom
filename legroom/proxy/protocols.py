@@ -5,6 +5,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Literal
 
+from ..ir import Conversation
+from ..provider_adapters import AdaptedConversation, adapter_for_path
+
 ProxyMode = Literal["token", "cache"]
 
 
@@ -18,8 +21,11 @@ class CompressionView:
     field: str
     offset: int = 0
     indices: tuple[int, ...] | None = None
+    adapted: AdaptedConversation | None = None
 
     def apply(self, body: dict[str, Any], compressed: list[dict[str, Any]]) -> bool:
+        if self.adapted is not None:
+            return self.adapted.apply(body, Conversation.from_mappings(compressed))
         original = body[self.field]
         if self.indices is not None:
             if len(compressed) != len(self.indices):
@@ -43,45 +49,20 @@ def compression_view(
     mode: ProxyMode,
 ) -> CompressionView | None:
     """Return a lossless view only for request shapes Legroom understands."""
-    if path == "/v1/chat/completions":
-        field = "messages"
-        protocol = "openai_chat"
-    elif path == "/v1/responses":
-        field = "input"
-        protocol = "openai_responses"
-    else:
+    adapter = adapter_for_path(path)
+    if adapter is None:
         return None
-
-    native = body.get(field)
-    if not isinstance(native, list) or not all(isinstance(item, dict) for item in native):
+    adapted = adapter.parse(body, cache_mode=mode == "cache")
+    if adapted is None:
         return None
-
-    messages = native
-    offset = 0
-    indices = None
-    if protocol == "openai_responses":
-        eligible = tuple(
-            index
-            for index, item in enumerate(native)
-            if item.get("type", "message") == "message"
-            and item.get("role") in {"system", "developer", "user", "assistant"}
-            and "content" in item
-        )
-        if mode == "cache" and eligible:
-            eligible = eligible[-1:]
-        indices = eligible
-        messages = [native[index] for index in eligible]
-    elif mode == "cache" and messages:
-        offset = len(messages) - 1
-        messages = messages[offset:]
 
     return CompressionView(
-        protocol=protocol,
+        protocol=adapted.provider,
         model=str(body.get("model", "gpt-4o")),
-        messages=messages,
-        field=field,
-        offset=offset,
-        indices=indices,
+        messages=adapted.conversation.to_mappings(),
+        field=adapted.field,
+        indices=adapted.indices,
+        adapted=adapted,
     )
 
 

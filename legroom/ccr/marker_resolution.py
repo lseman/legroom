@@ -20,7 +20,7 @@ def parse_markers(text: str) -> list[str]:
     hashes = []
     for pattern in _CCR_PATTERNS:
         for match in pattern.finditer(text):
-            hash_key = match.group(match.lastindex)
+            hash_key = match.group(1)
             if hash_key:
                 hashes.append(hash_key)
     return list(set(hashes))

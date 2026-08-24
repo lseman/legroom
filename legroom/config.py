@@ -66,6 +66,15 @@ class CompressConfig:
     kv_cache_optimization_enabled: bool = False
     kv_cache_min_prefix_bytes: int = 100
     kv_cache_min_occurrences: int = 2
+    # Model profiles are named presets, not implicit overrides. Enabling one
+    # deliberately replaces its model-dependent knobs; ordinary user config
+    # always wins by leaving this disabled.
+    use_model_profile: bool = False
+    # Protect trusted instructions, exact tool-call structure, unknown provider
+    # messages, and the current turn according to the typed IR risk labels.
+    risk_policy_enabled: bool = True
+    # Phase names disabled by an external calibration controller.
+    disabled_phases: tuple[str, ...] = ()
 
 
 @dataclass

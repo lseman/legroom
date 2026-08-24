@@ -57,7 +57,7 @@ class ContentDetector:
         sections = []
         lines = content.split("\n")
         current_type = "text"
-        current_lines = []
+        current_lines: list[str] = []
 
         for line in lines:
             section_type = self._classify_line(line)

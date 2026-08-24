@@ -100,6 +100,8 @@ MODEL_PROFILES: dict[str, CompressionProfile] = {
         protect_recent=3,
         min_compression_ratio=0.15,
     ),
+    # Fallback for unrecognized models.
+    "default": CompressionProfile(),
 }
 
 
@@ -123,9 +125,8 @@ def get_profile(model: str) -> CompressionProfile:
 def apply_profile(model: str, config: CompressConfig) -> CompressConfig:
     """Apply model-specific profile settings to a config.
 
-    Only applies settings that are model-dependent (protect_recent,
-    min_compression_ratio, size_bias). All other settings are preserved
-    from the user's config — this is a soft default, not a hard override.
+    This is an explicit preset operation. It applies model-dependent settings
+    while preserving all unrelated settings from ``config``.
     """
     profile = get_profile(model)
 

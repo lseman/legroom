@@ -241,5 +241,27 @@ def test_semantic_dedup_result_fields():
     assert len(result.messages) == 1
 
 
+def test_semantic_dedup_scans_history_and_protects_recent(monkeypatch: pytest.MonkeyPatch):
+    dedup = SemanticDedup(min_bytes=10, protect_recent=1, threshold=0.8)
+    monkeypatch.setattr(dedup, "_ensure_loaded", lambda: True)
+    monkeypatch.setattr(
+        "legroom.compressors.semantic_dedup._embed_batch",
+        lambda texts, session, tokenizer, cache: [[1.0, 0.0] for _ in texts],
+    )
+    repeated = "same historical content " * 5
+    recent = "same historical content " * 5
+    messages = [
+        {"role": "user", "content": repeated},
+        {"role": "assistant", "content": repeated},
+        {"role": "user", "content": recent},
+    ]
+
+    result = dedup.dedup(messages)
+
+    assert result.dedup_count == 1
+    assert result.messages[1]["content"].startswith("[semantically equivalent")
+    assert result.messages[2] == messages[2]
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

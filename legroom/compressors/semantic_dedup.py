@@ -173,7 +173,7 @@ def _embed_text(
     text: str,
     session,
     tokenizer,
-    cache: dict[str, list[float]],
+    cache: OrderedDict[str, list[float]],
 ) -> list[float] | None:
     """Generate an embedding for text using the ONNX model.
 
@@ -221,7 +221,7 @@ def _embed_batch(
     texts: list[str],
     session,
     tokenizer,
-    cache: dict[str, list[float]],
+    cache: OrderedDict[str, list[float]],
 ) -> list[list[float] | None]:
     """Generate embeddings for multiple texts in a single ONNX inference.
 
@@ -401,6 +401,8 @@ class SemanticDedup:
     def dedup(
         self,
         messages: list[dict[str, Any]],
+        *,
+        model: str = "gpt-4o",
     ) -> SemanticDedupResult:
         """Deduplicate semantically similar messages.
 
@@ -432,18 +434,18 @@ class SemanticDedup:
         # Count tokens before
         from ..tokenizer import count_tokens_messages
 
-        tokens_before = count_tokens_messages(messages, "gpt-4o")
+        tokens_before = count_tokens_messages(messages, model)
 
         # Determine which messages to check (skip recent ones)
         n = len(messages)
-        check_start = max(0, n - self._protect_recent - 1)
+        check_stop = max(0, n - self._protect_recent)
 
         # Phase 1: Collect eligible messages and compute Jaccard pre-filters.
         # Jaccard similarity is a cheap proxy — if word overlap is below
         # a fraction of the threshold, cosine similarity can't possibly
         # exceed the threshold (proven bound for unit-normalized vectors).
         eligible: list[tuple[int, str, set[str]]] = []
-        for i in range(check_start, n):
+        for i in range(check_stop):
             msg = messages[i]
             content = msg.get("content", "")
             if not isinstance(content, str) or not content.strip():
@@ -455,7 +457,7 @@ class SemanticDedup:
             eligible.append((i, content, words))
 
         if not eligible:
-            tokens_after = count_tokens_messages(messages, "gpt-4o")
+            tokens_after = count_tokens_messages(messages, model)
             return SemanticDedupResult(
                 messages=messages,
                 dedup_count=0,
@@ -520,7 +522,7 @@ class SemanticDedup:
                 # Store this message for future comparison
                 known[msg_idx] = (embedding, content, words)
 
-        tokens_after = count_tokens_messages(result, "gpt-4o")
+        tokens_after = count_tokens_messages(result, model)
 
         return SemanticDedupResult(
             messages=result,

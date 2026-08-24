@@ -138,8 +138,8 @@ def _find_knee(coverage: list[tuple[int, float]]) -> int:
         return 1
 
     # Calculate the elbow using the maximum distance from the diagonal
-    max_dist = 0
-    knee_k = None
+    max_dist = 0.0
+    knee_k: int | None = None
 
     for i, (k, coverage_pct) in enumerate(coverage):
         # Distance from the ideal diagonal (45 degree line)

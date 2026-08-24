@@ -131,17 +131,18 @@ class ContentRouter:
             try:
                 data = json.loads(content)
                 if isinstance(data, list) and len(data) > 5:
-                    output = self._crusher.compress(content, source_hint, model, query_terms)
-                    if output:
-                        output.content_type = "json"
-                        self._cache.put(content_hash, output.compressed)
-                        return output
+                    json_output = self._crusher.compress(content, source_hint, model, query_terms)
+                    if json_output:
+                        json_output.content_type = "json"
+                        self._cache.put(content_hash, json_output.compressed)
+                        return json_output
             except (json.JSONDecodeError, ValueError):
                 pass
             # Not a compressible JSON array — fall through to detector
 
         content_type = self._detector.detect(content)
 
+        output: CompressOutput | None
         if content_type == "json":
             output = self._compress_json(content, source_hint, model, query_terms)
         elif content_type == "log":

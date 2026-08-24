@@ -7,8 +7,9 @@ import json
 import logging
 import os
 import uuid
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
+from dataclasses import asdict
 from typing import Any
 from urllib.parse import urlsplit, urlunsplit
 
@@ -17,10 +18,20 @@ from fastapi import FastAPI, Request, Response, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 
+from .._version import __version__
+from ..calibration import CalibrationConfig, CalibrationController
 from ..ccr.compression_store import CompressionStore
 from ..ccr.tool_injection import create_ccr_tool_definition
 from ..compress import compress
 from ..config import CompressConfig
+from ..provider_cache import (
+    CacheMode,
+    CachePricing,
+    ProviderCachePolicy,
+    ProviderCacheUsage,
+    StreamingUsageParser,
+    parse_cache_usage,
+)
 from .body_forwarding import select_outbound_body
 from .compression_cache import CachedCompression, CompressionResultCache
 from .headers import filter_request_headers, filter_response_headers
@@ -81,6 +92,16 @@ class LegroomProxy:
         mode: str = "token",
         compression_cache_size: int = 256,
         compression_cache_ttl: float = 300.0,
+        provider_cache_mode: CacheMode = "off",
+        provider_cache_key: str | None = None,
+        provider_cache_ttl: str | None = None,
+        cache_pricing: CachePricing | None = None,
+        shadow_mode: bool = False,
+        calibration_config: CalibrationConfig | None = None,
+        quality_evaluator: Callable[
+            [list[dict[str, Any]], list[dict[str, Any]]], float
+        ]
+        | None = None,
     ) -> None:
         # Resolve API key from parameter or environment variable
         self.api_key = _resolve_api_key(api_key)
@@ -101,6 +122,15 @@ class LegroomProxy:
         # Compatibility alias for dashboard callers from pre-P2 releases.
         self._request_dedup = self._compression_cache
         self._metrics = ProxyMetrics()
+        self._provider_cache = ProviderCachePolicy(
+            mode=provider_cache_mode,
+            key=provider_cache_key,
+            ttl=provider_cache_ttl,
+        )
+        self._cache_pricing = cache_pricing or CachePricing()
+        self.shadow_mode = shadow_mode
+        self._calibration = CalibrationController(calibration_config)
+        self._quality_evaluator = quality_evaluator
         self._cors_origins = cors_origins
         self._compression_store = CompressionStore()
         if max_compression_concurrency < 1:
@@ -111,7 +141,7 @@ class LegroomProxy:
         self.app = FastAPI(
             title="Legroom — Context Compression Proxy",
             description="Reverse proxy with real-time compression tracking",
-            version="0.3.0",
+            version=__version__,
             lifespan=_lifespan,
         )
 
@@ -204,7 +234,7 @@ class LegroomProxy:
         if isinstance(response, StreamingResponse):
             original_iterator = response.body_iterator
 
-            async def measured_stream() -> AsyncIterator[bytes | str]:
+            async def measured_stream() -> AsyncIterator[bytes | str | memoryview]:
                 try:
                     async for chunk in original_iterator:
                         yield chunk
@@ -260,6 +290,7 @@ class LegroomProxy:
                         protect_recent=0,
                         ccr_enabled=path == "/v1/chat/completions",
                         read_lifecycle_enabled=True,
+                        disabled_phases=self._calibration.disabled_phases,
                     )
                     async with self._compression_slots:
                         result = await asyncio.to_thread(
@@ -269,28 +300,62 @@ class LegroomProxy:
                             config=config,
                             compression_store=self._compression_store,
                         )
+                    quality = 1.0
+                    if self._quality_evaluator is not None:
+                        try:
+                            quality = self._quality_evaluator(view.messages, result.messages)
+                            if not 0 <= quality <= 1:
+                                raise ValueError("quality evaluator must return a value from 0 to 1")
+                        except Exception as exc:  # noqa: BLE001 - injected evaluators define errors
+                            logger.warning("Quality evaluator failed: %s", exc)
+                            self._metrics.record_error("quality_evaluator")
+                            quality = 0.0
                     ccr_hashes = result.metadata.get("ccr_hashes") if result.metadata else None
-                    if ccr_hashes:
-                        self._state.record_ccr_store(len(ccr_hashes))
+                    phase_reports = result.metadata.get("phase_reports", []) if result.metadata else []
+                    if isinstance(phase_reports, list):
+                        self._calibration.record_reports(phase_reports, quality=quality)
+                        for report in phase_reports:
+                            if isinstance(report, dict):
+                                self._metrics.record_phase_report(report)
+                        self._metrics.set_calibration_disabled(
+                            self._calibration.disabled_phases
+                        )
                     for warning in result.warnings:
                         if "failed:" in warning.lower():
                             phase = warning.split(" failed:", 1)[0].lower().replace(" ", "_")
                             self._metrics.record_error(f"phase_{phase}")
-                    cached = CachedCompression(
-                        messages=result.messages,
-                        tokens_before=result.tokens_before,
-                        tokens_after=result.tokens_after,
-                        transforms=result.transforms_applied,
-                        ccr_hashes=tuple(ccr_hashes or ()),
-                    )
+                    if quality < self._calibration.config.minimum_quality:
+                        cached = CachedCompression(
+                            messages=view.messages,
+                            tokens_before=result.tokens_before,
+                            tokens_after=result.tokens_before,
+                            transforms=["quality_rollback"],
+                        )
+                        ccr_hashes = None
+                        self._metrics.record_error("quality_rollback")
+                    else:
+                        if ccr_hashes:
+                            self._state.record_ccr_store(len(ccr_hashes))
+                        cached = CachedCompression(
+                            messages=result.messages,
+                            tokens_before=result.tokens_before,
+                            tokens_after=result.tokens_after,
+                            transforms=result.transforms_applied,
+                            ccr_hashes=tuple(ccr_hashes or ()),
+                        )
                     self._compression_cache.put(cache_key, cached)
-                    transforms = result.transforms_applied
+                    transforms = list(cached.transforms)
                     warnings = result.warnings
                 else:
                     transforms = [*cached.transforms, "compression_cache_hit"]
                     warnings = []
 
-                body_mutated = view.apply(body, cached.messages)
+                assert body is not None
+                if self.shadow_mode:
+                    self._metrics.record_shadow(cached.tokens_before, cached.tokens_after)
+                    transforms = [*transforms, "shadow_mode"]
+                else:
+                    body_mutated = view.apply(body, cached.messages)
                 self._state.record_request(
                     request_id=request_id,
                     model=view.model,
@@ -311,6 +376,11 @@ class LegroomProxy:
                         tools.append(create_ccr_tool_definition())
                         body_mutated = True
 
+            if body is not None and view is not None:
+                body_mutated = self._provider_cache.apply(
+                    body, protocol=view.protocol
+                ) or body_mutated
+
             headers = filter_request_headers(request.headers.raw)
             if self.api_key:
                 headers = [(key, value) for key, value in headers if key.lower() != b"authorization"]
@@ -327,11 +397,15 @@ class LegroomProxy:
             is_stream = bool(body and body.get("stream"))
 
             if is_stream:
+                usage_parser = StreamingUsageParser()
+
                 async def stream_generator() -> AsyncIterator[bytes]:
                     try:
                         async for chunk in upstream.aiter_raw():
+                            usage_parser.feed(chunk)
                             yield chunk
                     finally:
+                        self._record_provider_usage(usage_parser.usage)
                         await upstream.aclose()
 
                 response = StreamingResponse(
@@ -355,9 +429,16 @@ class LegroomProxy:
                     if recalled_body is not None:
                         raw_body = recalled_body
 
-            response = Response(content=raw_body, status_code=upstream.status_code)
+            try:
+                final_document = json.loads(raw_body)
+            except (json.JSONDecodeError, UnicodeDecodeError):
+                final_document = None
+            if isinstance(final_document, dict):
+                self._record_provider_usage(parse_cache_usage(final_document))
+
+            standard_response = Response(content=raw_body, status_code=upstream.status_code)
             return _with_raw_headers(
-                response, filter_response_headers(upstream.headers.raw, streaming=False)
+                standard_response, filter_response_headers(upstream.headers.raw, streaming=False)
             )
         except (json.JSONDecodeError, UnicodeDecodeError):
             return JSONResponse(
@@ -378,6 +459,14 @@ class LegroomProxy:
                 {"error": {"type": "upstream_error", "message": "Upstream request failed"}},
                 status_code=502,
             )
+
+    def _record_provider_usage(self, usage: ProviderCacheUsage) -> None:
+        self._metrics.record_cache_usage(
+            input_tokens=usage.input_tokens,
+            write_tokens=usage.cache_write_tokens,
+            read_tokens=usage.cached_tokens,
+            cost_usd=usage.cost(self._cache_pricing),
+        )
 
     def _target_for(self, request: Request) -> str:
         """Resolve a request path against a base URL or legacy full route URL."""
@@ -484,7 +573,16 @@ class LegroomProxy:
         return JSONResponse(content={
             **self._state.get_stats(),
             "mode": self.mode,
+            "shadow_mode": self.shadow_mode,
             "inflight_requests": self._metrics.inflight,
+            "provider_cache": {
+                "mode": self._provider_cache.mode,
+                "input_tokens": self._metrics.cache_input_tokens,
+                "write_tokens": self._metrics.cache_write_tokens,
+                "read_tokens": self._metrics.cache_read_tokens,
+                "cost_usd": self._metrics.cache_cost_usd,
+            },
+            "calibration": [asdict(snapshot) for snapshot in self._calibration.snapshots()],
             "uptime_seconds": round(__import__("time").time() - self._metrics.started_at, 3),
         })
 

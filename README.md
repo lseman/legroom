@@ -13,19 +13,22 @@
 
 **Context compression for LLM agents.** Reduce token usage on every turn without losing the information the model actually needs — a Python-native alternative to [headroom](https://github.com/headroomlabs-ai/headroom), built as a library first and a proxy second.
 
-## Proof
+## Evaluation
 
-Measured with [`benchmarks/run_benchmark.py`](benchmarks/run_benchmark.py) against realistic agent traces (tool-call JSON, log dumps, repeated file reads, grep output) — not synthetic best cases:
+Legroom ships a versioned evaluation suite built from realistic agent traces:
+tool-call JSON, log dumps, repeated file reads, and search output. It compares
+Legroom with identity, recent-window, and head/tail truncation baselines and
+reports:
 
-| Trace | Before | After | Saved |
-|---|---:|---:|---:|
-| Coding-agent file reads (stale re-reads) | 548 | 412 | **24.8%** |
-| Log dump (retries, repeated lines) | 1139 | 856 | **24.8%** |
-| JSON tool results (paginated records) | 871 | 766 | 12.1% |
-| Grep results | 457 | 425 | 7.0% |
-| **Total** | **3015** | **2459** | **18.4%** |
+- token reduction and the aggregate quality–token Pareto frontier;
+- expected-fact task success and structural preservation invariants;
+- p50/p95 latency and peak traced memory;
+- per-fixture, per-strategy results in Markdown or machine-readable JSON.
 
-Run it yourself: `python benchmarks/run_benchmark.py`. It auto-detects a `headroom` install for a side-by-side comparison column; without one it just reports legroom's own numbers rather than guessing.
+Run it yourself with `python benchmarks/run_benchmark.py`, or produce a stable
+artifact with `python benchmarks/run_benchmark.py --json`. The suite manifest
+is [`benchmarks/suite-v1.json`](benchmarks/suite-v1.json); results are measured
+on the current checkout rather than copied from a separate installation.
 
 ## How it compresses
 
@@ -69,6 +72,11 @@ print(f"Tokens: {result.tokens_before} -> {result.tokens_after} (saved {result.t
 config = CompressConfig(protect_recent=2)
 result = compress(messages, model="gpt-4o", config=config)
 ```
+
+Model profiles are explicit presets so they never silently overwrite caller
+configuration. Set `CompressConfig(use_model_profile=True)` when you want the
+selected model's preset values for `protect_recent`, compression threshold, and
+adaptive-size bias.
 
 ## CLI
 
@@ -140,10 +148,33 @@ async with httpx.AsyncClient(base_url="http://127.0.0.1:8080/v1") as client:
 | `--api-key` | env var | API key (or env `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `LEGROOM_API_KEY`) |
 | `--no-compress` | false | Disable context compression |
 | `--mode` | `token` | `token` compresses full history; `cache` freezes prior items and compresses only the live item |
+| `--provider-cache` | `off` | Provider prompt-cache policy: `off`, `implicit`, or `explicit` |
+| `--prompt-cache-key` | derived | Stable explicit-cache key; caller-supplied request fields take precedence |
+| `--prompt-cache-ttl` | provider default | OpenAI extended prompt-cache retention (`24h`) |
+| `--shadow-mode` | false | Evaluate compression and potential savings without changing outbound context |
+| `--uncached-input-price` | `0` | USD per million uncached input tokens |
+| `--cache-write-price` | `0` | USD per million cache-write input tokens |
+| `--cache-read-price` | `0` | USD per million cache-read input tokens |
 
 The proxy compresses `POST /v1/chat/completions` and message-shaped
 `POST /v1/responses` requests. Other paths, methods, and bodies are forwarded
 byte-for-byte, including binary and non-JSON payloads.
+
+For cache-sensitive production traffic, start in shadow mode and preserve the
+stable prefix while measuring actual provider cache reads:
+
+```bash
+legroom proxy --mode cache --provider-cache explicit \
+  --prompt-cache-ttl 24h --shadow-mode \
+  --uncached-input-price 2.50 --cache-write-price 3.00 \
+  --cache-read-price 0.25
+```
+
+Pricing is deliberately supplied by the operator because provider and model
+rates change independently of Legroom releases. Once the quality and savings
+metrics meet your release gate, remove `--shadow-mode` to mutate outbound
+requests. Legroom never replaces prompt-cache fields already supplied by the
+caller.
 
 #### Environment variables
 
@@ -159,13 +190,13 @@ byte-for-byte, including binary and non-JSON payloads.
 | Endpoint | Description |
 |----------|-------------|
 | `GET /` | Dashboard UI |
-| `GET /api/stats` | Aggregate compression stats |
+| `GET /api/stats` | Compression, provider-cache, shadow, and calibration stats |
 | `GET /api/history?limit=50&offset=0` | Recent requests |
 | `GET /api/read-lifecycle` | Read lifecycle statistics |
 | `GET /api/ccr` | CCR store statistics |
 | `GET /livez` | Process liveness |
 | `GET /readyz` | HTTP-client readiness |
-| `GET /metrics` | Prometheus request, error, cache, latency, and token metrics |
+| `GET /metrics` | Prometheus request, phase, cache-token, cost, shadow, latency, and token metrics |
 | `GET /ws/events` | WebSocket live events |
 | `GET /api/events` | SSE fallback live events |
 
@@ -191,6 +222,27 @@ Phase 4: ThinkingCompactor (reasoning block removal)
 Phase 5: CCR Tool Injection (retrieval tool + instructions)
 ```
 
+Provider requests first pass through lossless OpenAI Chat Completions or
+Responses adapters into a typed, provider-neutral conversation IR. Unknown
+provider fields and opaque content blocks round-trip unchanged. Each enabled
+pipeline phase then follows the same `analyze → propose → validate → apply`
+contract. Results include `metadata["phase_reports"]` with phase status, token
+delta, protected spans, reversibility, latency, confidence, failures, and
+phase-specific metadata.
+
+The IR assigns provenance and compression-risk labels at the provider boundary.
+System/developer instructions, structured tool calls, opaque provider data, and
+the current user turn are restored after every phase if a transform touches
+them. A rolling calibration controller can disable phases whose validated
+success or downstream-quality score falls below configured gates; per-request
+quality failures roll back the whole candidate. Shadow mode exercises the same
+pipeline and reports potential savings without changing the request sent
+upstream.
+
+Token counts include protocol framing, roles, tool calls, structured content,
+and tool identifiers. They are still estimates: providers may use private wire
+serialization and media-token accounting.
+
 ## Testing
 
 ```bash
@@ -205,7 +257,11 @@ python benchmarks/run_benchmark.py --json     # machine-readable
 python benchmarks/run_benchmark.py --model claude-3-5-sonnet
 ```
 
-Fixtures live in [`benchmarks/fixtures/`](benchmarks/fixtures/) as plain `{"description", "messages"}` JSON — drop in your own traces to benchmark against your actual workload. Each run reports tokens before/after, compression ratio, latency, and which transforms fired per trace.
+Fixtures live in [`benchmarks/fixtures/`](benchmarks/fixtures/) as plain `{"description", "messages"}` JSON — drop in your own traces to benchmark against your actual workload. Each run reports tokens before/after, compression ratio, latency, memory, invariants, and task-success scores per trace. The Python harness also accepts a typed callable evaluator, so repository tests, model graders, or complete agent tasks can produce executable pass/fail and score evidence instead of relying only on retained terms.
+
+Task-success markers and suite membership live in the versioned suite manifest,
+separate from trace payloads. This makes corpus changes reviewable and prevents
+silent benchmark drift.
 
 ## Model Integration
 

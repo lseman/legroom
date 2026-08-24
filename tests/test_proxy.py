@@ -2,6 +2,7 @@
 
 import inspect
 
+import httpx
 import pytest
 
 from legroom.proxy.proxy_dashboard import get_dashboard_html
@@ -263,10 +264,9 @@ async def test_cors_middleware_with_origins():
     """Proxy should add CORS middleware when origins are provided."""
     proxy = LegroomProxy(cors_origins=["http://localhost:3000"])
     
-    from starlette.testclient import TestClient
-    client = TestClient(proxy.app)
-    # GET / should return 200 and include CORS header for allowed origin
-    resp = client.get("/", headers={"Origin": "http://localhost:3000"})
+    transport = httpx.ASGITransport(app=proxy.app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.get("/", headers={"Origin": "http://localhost:3000"})
     assert resp.status_code == 200
     assert resp.headers.get("access-control-allow-origin") == "http://localhost:3000"
 
@@ -276,9 +276,9 @@ async def test_no_cors_without_origins():
     """Proxy should not add CORS middleware by default."""
     proxy = LegroomProxy()
     
-    from starlette.testclient import TestClient
-    client = TestClient(proxy.app)
-    resp = client.options("/", headers={"Origin": "http://evil.com"})
+    transport = httpx.ASGITransport(app=proxy.app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.options("/", headers={"Origin": "http://evil.com"})
     # Without CORS middleware, Access-Control-Allow-Origin should not be present
     assert "access-control-allow-origin" not in resp.headers
 

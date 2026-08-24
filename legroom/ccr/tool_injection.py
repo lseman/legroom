@@ -119,7 +119,7 @@ class CCRToolInjector:
         """Scan text for compression markers."""
         for pattern in _MARKERS:
             for match in pattern.finditer(text):
-                hash_key = match.group(match.lastindex)
+                hash_key = match.group(1)
                 if hash_key and hash_key not in seen:
                     seen.add(hash_key)
                     self._detected_hashes.append(hash_key)

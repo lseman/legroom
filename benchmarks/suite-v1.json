@@ -1,0 +1,10 @@
+{
+  "schema_version": 1,
+  "name": "legroom-agent-traces-v1",
+  "fixtures": [
+    {"path": "fixtures/coding_agent_reads.json", "expected_terms": ["paginate.py", "total_pages", "page_size", "ValueError"]},
+    {"path": "fixtures/grep_results.json", "expected_terms": ["CompressConfig", "proxy_server.py", "protect_recent"]},
+    {"path": "fixtures/json_tool_results.json", "expected_terms": ["acct_4471", "ord_9004", "ord_9013", "cancelled", "refunded"]},
+    {"path": "fixtures/log_dump.json", "expected_terms": ["ERROR", "ord_2", "ord_5", "timeout", "max retries"]}
+  ]
+}

@@ -45,7 +45,8 @@ class CodeCompressor:
             if not part:
                 continue
             if part.startswith("```"):
-                lang = _CODE_LANG.match(part).group(1) or ""
+                match = _CODE_LANG.match(part)
+                lang = match.group(1) if match else ""
                 code_body = _CODE_BLOCK_END.sub("", part).strip()
                 code_body = self._compress_code_block(code_body, model)
                 result.append(f"```{lang}\n{code_body}\n```")
