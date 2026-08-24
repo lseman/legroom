@@ -59,6 +59,13 @@ class CompressConfig:
     semantic_dedup_model_path: str | None = None
     semantic_dedup_config_path: str | None = None
     semantic_dedup_vocab_path: str | None = None
+    # KV cache optimization — prefix deduplication across messages.
+    # Finds common prefixes across messages and replaces later occurrences
+    # with compact pointers, reducing KV cache pressure. No external deps.
+    # Off by default (opt-in) — adds a pipeline phase.
+    kv_cache_optimization_enabled: bool = False
+    kv_cache_min_prefix_bytes: int = 100
+    kv_cache_min_occurrences: int = 2
 
 
 @dataclass

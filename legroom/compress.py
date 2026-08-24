@@ -71,6 +71,9 @@ def compress(
         semantic_dedup_model_path=cfg.semantic_dedup_model_path,
         semantic_dedup_config_path=cfg.semantic_dedup_config_path,
         semantic_dedup_vocab_path=cfg.semantic_dedup_vocab_path,
+        kv_cache_optimization_enabled=cfg.kv_cache_optimization_enabled,
+        kv_cache_min_prefix_bytes=cfg.kv_cache_min_prefix_bytes,
+        kv_cache_min_occurrences=cfg.kv_cache_min_occurrences,
         strict=cfg.strict,
     )
 

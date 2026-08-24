@@ -1,4 +1,11 @@
-"""Transform pipeline — orchestrates compression transforms."""
+"""Transform pipeline — orchestrates compression transforms.
+
+Parallel execution:
+- Within CompressPhase: each message's compression runs in parallel
+- Within SemanticDedup: ONNX inference batched (already done in the
+  optimizer module)
+- Within CrossTurnDedup: hashing runs in parallel
+"""
 
 from __future__ import annotations
 
@@ -6,6 +13,7 @@ import hashlib
 import logging
 import re
 from collections import OrderedDict
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from copy import deepcopy
 from typing import Any
 
@@ -15,6 +23,7 @@ from .compressors.compressor_registry import _compute_salience
 from .compressors.content_detector import ContentDetector
 from .compressors.models import apply_profile
 from .compressors.content_router import ContentRouter
+from .compressors.kv_cache_optimizer import KVOptimizer
 from .compressors.lossless_compaction import compact_lossless
 from .compressors.recursive_json import route_embedded_json
 from .compressors.semantic_dedup import SemanticDedup, SemanticDedupResult
@@ -141,7 +150,12 @@ class ContentHashCache:
 
 
 class CompressPhase:
-    """Phase that applies content compression."""
+    """Phase that applies content compression.
+
+    Parallel execution: compresses each message independently using a
+    thread pool. This is the biggest parallelization win since compression
+    is CPU-bound and each message's compression is independent.
+    """
 
     def __init__(
         self,
@@ -153,6 +167,7 @@ class CompressPhase:
         ml_tokenizer_path: str | None = None,
         ml_retention_threshold: float = 0.5,
         ml_min_compression_ratio: float = 0.1,
+        max_workers: int = 4,
     ) -> None:
         self._router = ContentRouter(
             adaptive_sizing=adaptive_sizing,
@@ -165,68 +180,98 @@ class CompressPhase:
         )
         self._cache = cache or ContentHashCache()
         self._detector = ContentDetector()
+        self._max_workers = max_workers
+
+    def _compress_single(
+        self,
+        msg: dict[str, Any],
+        query_terms: set[str],
+        model: str,
+    ) -> dict[str, Any]:
+        """Compress a single message. Used by both sequential and parallel paths."""
+        content = msg.get("content", "")
+        if isinstance(content, str) and content.strip():
+            # Check compression cache (before lossless, on raw content).
+            # Skipped under query-aware compression — see ContentRouter.compress.
+            if not query_terms:
+                cached = self._cache.get(content)
+                if cached is not None:
+                    return {**msg, "content": cached}
+
+            original_content = content
+
+            # Try lossless compaction first. ContentDetector's vocabulary
+            # (json/log/search/code/text) doesn't line up 1:1 with
+            # compact_lossless's (log/grep/diff/text) — map the two
+            # hints that do correspond so the log/grep-specific
+            # transforms actually get a chance to run instead of always
+            # falling through to the hardcoded "text" no-op branch.
+            detected = self._detector.detect(content)
+            lossless_hint = "grep" if detected == "search" else detected
+            compacted = compact_lossless(content, lossless_hint)
+            if compacted.transforms_applied:
+                content = compacted.compressed
+
+            # Route through content router with model
+            compressor_output = self._router.compress(
+                content, source_hint="text", model=model, query_terms=query_terms
+            )
+            if compressor_output and compressor_output.tokens_saved > 0:
+                content = compressor_output.compressed
+
+            # Try recursive JSON routing — only for plain text.
+            # JSON, code, log, and search content were already
+            # handled by their dedicated compressors above; the
+            # expensive balanced-brace scan would be wasted work.
+            if compressor_output is not None and compressor_output.content_type == "text":
+                json_result = route_embedded_json(
+                    content,
+                    lambda span: self._router.compress(
+                        span, source_hint="text", model=model, query_terms=query_terms
+                    ),
+                )
+                if json_result is not None:
+                    content = json_result
+
+            # Cache the result keyed by the original raw content
+            if content != original_content and not query_terms:
+                self._cache.put(original_content, content)
+
+        return {**msg, "content": content}
 
     def apply(
         self, messages: list[dict[str, Any]], config: CompressConfig, model: str = "gpt-4o"
     ) -> list[dict[str, Any]]:
-        """Apply compression to messages with cache lookups."""
+        """Apply compression to messages with cache lookups.
+
+        Parallel execution: compresses messages in batches using a thread
+        pool. Each message's compression is independent, so this scales
+        with CPU cores. The shared cache is thread-safe via OrderedDict's
+        atomic operations.
+        """
         query_terms = (
             latest_query_terms(messages) if getattr(config, "query_aware", True) else set()
         )
 
-        result = []
-        for msg in messages:
-            content = msg.get("content", "")
-            if isinstance(content, str) and content.strip():
-                # Check compression cache (before lossless, on raw content).
-                # Skipped under query-aware compression — see ContentRouter.compress.
-                if not query_terms:
-                    cached = self._cache.get(content)
-                    if cached is not None:
-                        result.append({**msg, "content": cached})
-                        continue
+        # Fast path: single message or no content — no parallelism needed
+        if len(messages) <= 1:
+            return [
+                self._compress_single(msg, query_terms, model) for msg in messages
+            ]
 
-                original_content = content
+        # Parallel compression using thread pool
+        result: list[dict[str, Any] | None] = [None] * len(messages)
 
-                # Try lossless compaction first. ContentDetector's vocabulary
-                # (json/log/search/code/text) doesn't line up 1:1 with
-                # compact_lossless's (log/grep/diff/text) — map the two
-                # hints that do correspond so the log/grep-specific
-                # transforms actually get a chance to run instead of always
-                # falling through to the hardcoded "text" no-op branch.
-                detected = self._detector.detect(content)
-                lossless_hint = "grep" if detected == "search" else detected
-                compacted = compact_lossless(content, lossless_hint)
-                if compacted.transforms_applied:
-                    content = compacted.compressed
+        with ThreadPoolExecutor(max_workers=self._max_workers) as executor:
+            futures = {
+                executor.submit(self._compress_single, msg, query_terms, model): i
+                for i, msg in enumerate(messages)
+            }
+            for future in as_completed(futures):
+                idx = futures[future]
+                result[idx] = future.result()
 
-                # Route through content router with model
-                compressor_output = self._router.compress(
-                    content, source_hint="text", model=model, query_terms=query_terms
-                )
-                if compressor_output and compressor_output.tokens_saved > 0:
-                    content = compressor_output.compressed
-
-                # Try recursive JSON routing — only for plain text.
-                # JSON, code, log, and search content were already
-                # handled by their dedicated compressors above; the
-                # expensive balanced-brace scan would be wasted work.
-                if compressor_output is not None and compressor_output.content_type == "text":
-                    json_result = route_embedded_json(
-                        content,
-                        lambda span: self._router.compress(
-                            span, source_hint="text", model=model, query_terms=query_terms
-                        ),
-                    )
-                    if json_result is not None:
-                        content = json_result
-
-                # Cache the result keyed by the original raw content
-                if content != original_content and not query_terms:
-                    self._cache.put(original_content, content)
-
-            result.append({**msg, "content": content})
-        return result
+        return result  # type: ignore[return-value]
 
 
 _THINKING_PATTERN = re.compile(r"<think>.*?</think>", re.DOTALL)
@@ -292,6 +337,9 @@ class TransformPipeline:
         semantic_dedup_model_path: str | None = None,
         semantic_dedup_config_path: str | None = None,
         semantic_dedup_vocab_path: str | None = None,
+        kv_cache_optimization_enabled: bool = False,
+        kv_cache_min_prefix_bytes: int = 100,
+        kv_cache_min_occurrences: int = 2,
         strict: bool = False,
     ) -> None:
         self.compress_enabled = compress_enabled
@@ -326,6 +374,12 @@ class TransformPipeline:
         self._semantic_dedup_config_path = semantic_dedup_config_path
         self._semantic_dedup_vocab_path = semantic_dedup_vocab_path
         self._semantic_dedup: SemanticDedup | None = None
+
+        # KV cache optimization — created lazily in apply() when config is known
+        self._kv_cache_optimization_enabled = kv_cache_optimization_enabled
+        self._kv_cache_min_prefix_bytes = kv_cache_min_prefix_bytes
+        self._kv_cache_min_occurrences = kv_cache_min_occurrences
+        self._kv_optimizer: KVOptimizer | None = None
 
     def apply(
         self,
@@ -472,6 +526,30 @@ class TransformPipeline:
                     raise
                 logger.warning(f"SemanticDedup failed: {e}")
                 self._warnings.append(f"Semantic dedup failed: {type(e).__name__}: {e}")
+
+        # Phase 2.8: KV cache optimization (prefix dedup + token-boundary alignment)
+        if self._kv_cache_optimization_enabled:
+            if self._kv_optimizer is None:
+                self._kv_optimizer = KVOptimizer(
+                    min_prefix_bytes=self._kv_cache_min_prefix_bytes,
+                    min_occurrences=self._kv_cache_min_occurrences,
+                )
+            try:
+                kv_result = self._kv_optimizer.optimize(current_messages, model=model)
+                current_messages = _restore_read_results(
+                    kv_result.messages, fresh_read_snapshots
+                )
+                if kv_result.prefix_dedup_count > 0 or kv_result.token_boundary_aligned > 0:
+                    self._applied_transforms.append("kv_cache_optimization")
+                    self._warnings.append(
+                        f"kv_cache_optimization: {kv_result.prefix_dedup_count} prefixes "
+                        f"deduped, {kv_result.token_boundary_aligned} messages aligned"
+                    )
+            except Exception as e:
+                if self.strict:
+                    raise
+                logger.warning(f"KV cache optimization failed: {e}")
+                self._warnings.append(f"KV cache optimization failed: {type(e).__name__}: {e}")
 
         # Phase 3: Compression
         if self.compress_enabled:

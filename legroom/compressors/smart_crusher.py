@@ -129,8 +129,8 @@ class SmartCrusher:
                     still_to_compress.append(item)
             to_compress = still_to_compress
 
-        # Value-aware grouping
-        groups = self._find_value_aware_groups(to_compress)
+        # Value-aware grouping with cached fingerprints
+        groups, item_fingerprints = self._find_value_aware_groups(to_compress)
 
         result = []
         for group in groups:
@@ -145,8 +145,16 @@ class SmartCrusher:
                     result.extend(group)
                     continue
 
+            # Skip entropy check for large groups — O(n²) is too expensive
+            # and adaptive_sizing already decided to compress them.
+            if len(group) > 50:
+                result.append(self._summarize_group(group))
+                continue
+
             # Value entropy check: don't compress if the group is too diverse
-            entropy = self._compute_group_entropy(group)
+            entropy = self._compute_group_entropy(
+                group, item_fingerprints.get(id(group), [])
+            )
             if entropy > 0.7:
                 result.extend(group)
                 continue
@@ -161,22 +169,34 @@ class SmartCrusher:
     # Value-aware grouping
     # ------------------------------------------------------------------
 
-    def _find_value_aware_groups(self, items: list) -> list[list]:
+    def _find_value_aware_groups(self, items: list) -> tuple[list[list], dict[int, list[str]]]:
         """Group items by both structural fingerprint AND value fingerprint.
 
         The structural fingerprint captures key names and types.
         The value fingerprint captures the "shape" of values to ensure
         items in a group are actually similar, not just structurally similar.
+
+        Returns (groups, per-group fingerprints) so entropy computation
+        can reuse the fingerprints instead of recomputing them.
         """
         groups: dict[str, list] = defaultdict(list)
+        fingerprints: dict[int, list[str]] = {}
         for item in items:
             if isinstance(item, dict):
                 struct_key = self._structural_key(item)
                 value_key = self._value_fingerprint(item)
+                group_id = id(groups[f"{struct_key}|{value_key}"])
+                if group_id not in fingerprints:
+                    fingerprints[group_id] = []
+                fingerprints[group_id].append(value_key)
                 groups[f"{struct_key}|{value_key}"].append(item)
             else:
+                group_id = id(groups[str(type(item))])
+                if group_id not in fingerprints:
+                    fingerprints[group_id] = []
+                fingerprints[group_id].append(str(type(item)))
                 groups[str(type(item))].append(item)
-        return list(groups.values())
+        return list(groups.values()), fingerprints
 
     def _structural_key(self, item: dict) -> str:
         """Create a structural fingerprint for an item."""
@@ -234,23 +254,51 @@ class SmartCrusher:
     # Value entropy analysis
     # ------------------------------------------------------------------
 
-    def _compute_group_entropy(self, group: list) -> float:
+    def _compute_group_entropy(
+        self, group: list, cached_fingerprints: list[str] | None = None
+    ) -> float:
         """Compute the entropy of a group of items.
 
         Returns a value in [0, 1] where 0 = all items identical,
         1 = all items completely different. Groups with entropy > 0.7
         are too diverse to compress safely.
+
+        Uses a fast pre-filter (unique fingerprint count) before the
+        expensive O(n²) pairwise distance computation.
         """
         if len(group) <= 1:
             return 0.0
 
-        # Compute pairwise value similarity using fingerprint distance
-        fingerprints = [self._value_fingerprint(item) for item in group]
+        # Reuse cached fingerprints if available (avoids recomputation)
+        if cached_fingerprints is None:
+            cached_fingerprints = [self._value_fingerprint(item) for item in group]
+
+        # Fast pre-filter: if all fingerprints are unique, entropy is
+        # likely high — use a cheap heuristic to skip the O(n²) work.
+        unique_fps = set(cached_fingerprints)
+        if len(unique_fps) == len(cached_fingerprints):
+            # All unique: quick check on fingerprint length variance.
+            # If lengths are similar, items are likely structurally similar
+            # but with different values → moderate entropy.
+            fps = cached_fingerprints
+            avg_len = sum(len(f) for f in fps) / len(fps)
+            if avg_len > 0:
+                length_variance = sum(
+                    (len(f) - avg_len) ** 2 for f in fps
+                ) / len(fps)
+                normalized_var = length_variance / (avg_len ** 2)
+                # High length variance → high entropy
+                if normalized_var > 0.5:
+                    return 0.8  # Skip pairwise, assume too diverse
+
+        # Full pairwise distance computation
         total_distance = 0
         count = 0
-        for i in range(len(fingerprints)):
-            for j in range(i + 1, len(fingerprints)):
-                dist = self._fingerprint_distance(fingerprints[i], fingerprints[j])
+        for i in range(len(cached_fingerprints)):
+            for j in range(i + 1, len(cached_fingerprints)):
+                dist = self._fingerprint_distance(
+                    cached_fingerprints[i], cached_fingerprints[j]
+                )
                 total_distance += dist
                 count += 1
 
@@ -260,7 +308,7 @@ class SmartCrusher:
         avg_distance = total_distance / count
         # Normalize: distance of 0 = identical, distance of max = different
         # Max possible distance is roughly len(fingerprint) * 2
-        max_dist = max(1, len(fingerprints[0]) * 2)
+        max_dist = max(1, len(cached_fingerprints[0]) * 2)
         return min(avg_distance / max_dist, 1.0)
 
     def _fingerprint_distance(self, fp1: str, fp2: str) -> int:

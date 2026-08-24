@@ -40,10 +40,11 @@ class _TokenCache:
 
     Uses OrderedDict for O(1) removal (vs O(n) with a list) since
     in a real conversation the cache sees many unique texts and
-    eviction is frequent.
+    eviction is frequent. Increased to 2048 for proxy mode where
+    tool outputs repeat frequently.
     """
 
-    def __init__(self, maxsize: int = 512) -> None:
+    def __init__(self, maxsize: int = 2048) -> None:
         self._cache: OrderedDict[str, int] = OrderedDict()
         self._maxsize = maxsize
         self._hits = 0
@@ -101,15 +102,22 @@ def get_encoding(model: str) -> tiktoken.Encoding:
 def count_tokens(text: str, model: str = "gpt-4o") -> int:
     """Count tokens in text with LRU caching.
 
-    Cached by (model, sha256(text)) so the same text+model pair
-    avoids re-encoding on repeated calls.
-    Uses tiktoken for accurate counting instead of the rough
-    ``len(text) // 4`` heuristic.
+    Cached by (model, md5(text)) so the same text+model pair
+    avoids re-encoding on repeated calls. Uses tiktoken for accurate
+    counting instead of the rough ``len(text) // 4`` heuristic.
     Non-string content (e.g. Anthropic content blocks) returns 0;
     use ``count_tokens_messages`` which handles list content.
+
+    Fast paths:
+      - Empty/None text → 0 (no hashing overhead)
+      - Short text (< 50 chars) → direct encode, no cache (overhead
+        of hashing + cache ops exceeds the encode cost)
     """
     if not isinstance(text, str) or not text:
         return 0
+    # Short text: hashing + cache overhead exceeds encode cost.
+    if len(text) < 50:
+        return len(get_encoding(model).encode(text))
     key = f"{model}:{_hash_func(text.encode()).hexdigest()[:16]}"
     cached = token_cache.get(key)
     if cached is not None:

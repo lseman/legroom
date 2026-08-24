@@ -22,9 +22,12 @@ logger = logging.getLogger(__name__)
 
 
 class CompressionCache:
-    """LRU cache for compressed content."""
+    """LRU cache for compressed content.
 
-    def __init__(self, max_size: int = 100) -> None:
+    Increased to 512 for proxy mode where tool outputs repeat frequently.
+    """
+
+    def __init__(self, max_size: int = 512) -> None:
         self._cache: OrderedDict[str, str] = OrderedDict()
         self._max_size = max_size
 
@@ -51,7 +54,7 @@ class ContentRouter:
     def __init__(
         self,
         max_items: int = 50,
-        cache_size: int = 100,
+        cache_size: int = 512,
         adaptive_sizing: bool = False,
         size_bias: float = 1.0,
         ml_compress_enabled: bool = False,
@@ -101,10 +104,14 @@ class ContentRouter:
         to the current turn (see :mod:`legroom.query_relevance`). When set,
         the compression cache is bypassed for JSON content since a cached
         result from a different query wouldn't reflect the current bias.
+
+        Cache check happens before content detection and JSON parsing to
+        avoid wasted work on repeated identical content.
         """
         # Check cache — skipped for query-aware compression, since a cached
         # result may have been produced (or would be reused) under a
-        # different query's relevance bias.
+        # different query's relevance bias. This check happens before
+        # content detection and JSON parsing to avoid wasted work.
         content_hash = hashlib.md5(content.encode()).hexdigest()[:16]
         if not query_terms:
             cached = self._cache.get(content_hash)
@@ -115,6 +122,23 @@ class ContentRouter:
                     compressed_token_count=count_tokens(cached, model),
                     strategy=f"cached:{source_hint}",
                 )
+
+        # Fast pre-check: if content looks like JSON, try parsing before
+        # running the full detector — this avoids the detector's regex
+        # overhead for the common case of repeated JSON tool outputs.
+        stripped = content.strip()
+        if stripped.startswith(("[", "{")):
+            try:
+                data = json.loads(content)
+                if isinstance(data, list) and len(data) > 5:
+                    output = self._crusher.compress(content, source_hint, model, query_terms)
+                    if output:
+                        output.content_type = "json"
+                        self._cache.put(content_hash, output.compressed)
+                        return output
+            except (json.JSONDecodeError, ValueError):
+                pass
+            # Not a compressible JSON array — fall through to detector
 
         content_type = self._detector.detect(content)
 
