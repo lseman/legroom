@@ -1,5 +1,16 @@
 # Legroom
 
+<p align="center">
+  <img src="assets/logo.svg" alt="Legroom" width="280">
+</p>
+
+<p align="center">
+  <a href="https://pypi.org/project/legroom/"><img src="https://img.shields.io/pypi/v/legroom.svg" alt="PyPI version"></a>
+  <a href="https://pypi.org/project/legroom/"><img src="https://img.shields.io/pypi/pyversions/legroom.svg" alt="Python versions"></a>
+  <a href="https://pypi.org/project/legroom/"><img src="https://img.shields.io/pypi/dm/legroom.svg" alt="PyPI downloads"></a>
+  <a href="https://github.com/seman/legroom/blob/main/LICENSE"><img src="https://img.shields.io/github/license/seman/legroom.svg" alt="License"></a>
+</p>
+
 **Context compression for LLM agents.** Reduce token usage on every turn without losing the information the model actually needs — a Python-native alternative to [headroom](https://github.com/headroomlabs-ai/headroom), built as a library first and a proxy second.
 
 ## Proof
