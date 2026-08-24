@@ -1,35 +1,37 @@
 """Compressors — per-content-type compression strategies and routing."""
 
-from .content_detector import ContentDetector
-from .content_router import ContentRouter, CompressOutput as RouterCompressOutput, CompressionCache
-from .compressor_registry import CompressInput, CompressOutput, _compute_salience
-from .smart_crusher import SmartCrusher, SmartCrusherConfig
-from .log_compressor import LogCompressor
-from .search_compressor import SearchCompressor
+from .adaptive_sizer import compute_optimal_k, count_unique_simhash
 from .code_compressor import CodeCompressor
-from .text_compressor import TextCompressor
+from .compressor_registry import CompressInput, CompressOutput
+from .content_detector import ContentDetector
+from .content_router import CompressionCache, ContentRouter
+from .log_compressor import LogCompressor
+from .lossless_compaction import LosslessResult, compact_lossless
 from .ml_compressor import MLTextCompressor
 from .recursive_json import route_embedded_json
-from .lossless_compaction import compact_lossless, LosslessResult
-from .adaptive_sizer import compute_optimal_k, count_unique_simhash
+from .search_compressor import SearchCompressor
+from .semantic_dedup import SemanticDedup, SemanticDedupResult
+from .smart_crusher import SmartCrusher, SmartCrusherConfig
+from .text_compressor import TextCompressor
 
 __all__ = [
-    "ContentDetector",
-    "ContentRouter",
-    "RouterCompressOutput",
-    "CompressionCache",
+    "CodeCompressor",
     "CompressInput",
     "CompressOutput",
+    "CompressionCache",
+    "ContentDetector",
+    "ContentRouter",
+    "LogCompressor",
+    "LosslessResult",
+    "MLTextCompressor",
+    "SearchCompressor",
+    "SemanticDedup",
+    "SemanticDedupResult",
     "SmartCrusher",
     "SmartCrusherConfig",
-    "LogCompressor",
-    "SearchCompressor",
-    "CodeCompressor",
     "TextCompressor",
-    "MLTextCompressor",
-    "route_embedded_json",
     "compact_lossless",
-    "LosslessResult",
     "compute_optimal_k",
     "count_unique_simhash",
+    "route_embedded_json",
 ]

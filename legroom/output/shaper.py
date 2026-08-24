@@ -14,32 +14,22 @@ class OutputShaper:
 
     def apply(self, messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
         """Apply output shaping to messages."""
-        if not messages or self.protect_recent <= 0:
+        if not messages or self.protect_recent > 0:
             return messages
-
+        latest_user = next(
+            (index for index in range(len(messages) - 1, -1, -1) if messages[index].get("role") == "user"),
+            None,
+        )
+        if latest_user is None:
+            return messages
+        content = messages[latest_user].get("content")
+        directive = (
+            "(Return only the requested content.)"
+            if self.verbosity_level <= 1
+            else "(Be concise — no preamble. Return only the requested content.)"
+        )
+        if not isinstance(content, str) or directive in content:
+            return messages
         result = list(messages)
-        for i in range(len(result) - 1, -1, -1):
-            if result[i].get("role") == "assistant":
-                content = result[i].get("content", "")
-                if not isinstance(content, str) or not content.strip() or self._is_concise_enough(content):
-                    break
-                # Steer the last user message only if not protected
-                if self.protect_recent > 0 and i < len(result) - self.protect_recent:
-                    continue
-                for j in range(i + 1, len(result)):
-                    if result[j].get("role") == "user" and j >= len(result) - self.protect_recent:
-                        break
-                    if result[j].get("role") == "user" and j == len(result) - 1:
-                        existing = result[j].get("content", "")
-                        result[j]["content"] = existing + "\n\n(Be concise — no preamble. Return only the requested content.)"
-                        break
-                break
-
+        result[latest_user] = {**result[latest_user], "content": f"{content.rstrip()}\n\n{directive}"}
         return result
-
-    def _is_concise_enough(self, content: str) -> bool:
-        """Check if content is already concise."""
-        if not content:
-            return True
-        words = content.split()
-        return len(words) < 100

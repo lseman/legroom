@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import hashlib
 from collections import Counter
 
@@ -78,7 +77,7 @@ def _simhash(text: str) -> int:
 
 
 def _hamming_distance(a: int, b: int) -> int:
-    return bin(a ^ b).count("1")
+    return (a ^ b).bit_count()
 
 
 def count_unique_simhash(items: list[str], threshold: int = 10) -> int:

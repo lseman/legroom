@@ -3,10 +3,9 @@
 from __future__ import annotations
 
 import re
-from typing import Any
 
-from .compressor_registry import CompressInput, CompressOutput
 from ..tokenizer import count_tokens
+from .compressor_registry import CompressOutput
 
 # Triple-quote string delimiters defined via chr() to avoid syntax issues
 TRIPLE_DQ = chr(34) * 3  # """
@@ -19,7 +18,12 @@ _CODE_BLOCK_SPLIT = re.compile(r"(```(\w*)\n.*?```)", re.DOTALL)
 _CODE_LANG = re.compile(r"```(\w*)")
 _CODE_BLOCK_END = re.compile(r"^```\w*\n|\n```$")
 _WS_NORMALIZE = re.compile(r"[ \t]+")
-_STRING_LITERAL = re.compile(r'(?<=[(,=:])\s*([fbr]?"[^"]*?")')
+# Keep the optional Python string prefix and the quoted contents in separate
+# groups.  The replacement callback needs both; the previous pattern exposed
+# only one group and therefore raised ``IndexError: no such group``.
+_STRING_LITERAL = re.compile(
+    r'(?<=[(,=:])\s*([fFrRbBuU]{0,2})"((?:\\.|[^"\\])*)"'
+)
 
 
 class CodeCompressor:

@@ -5,10 +5,11 @@ from __future__ import annotations
 import argparse
 import json
 import sys
-from typing import Optional
+from pathlib import Path
 
 
 def compress_stdin(
+    input_file: str = "-",
     model: str = "gpt-4o",
     output_file: str = "-",
     protect_recent: int = 0,
@@ -19,7 +20,7 @@ def compress_stdin(
     from .compress import compress
     from .config import CompressConfig
 
-    input_text = sys.stdin.read() if True else open("input.json").read()
+    input_text = sys.stdin.read() if input_file == "-" else Path(input_file).read_text()
     try:
         messages = json.loads(input_text)
     except json.JSONDecodeError as e:
@@ -43,16 +44,20 @@ def compress_stdin(
         "warnings": result.warnings,
     }
 
-    output_text = json.dumps(output, indent=2)
-    print(output_text)
+    output_text = json.dumps(output, indent=2) + "\n"
+    if output_file == "-":
+        sys.stdout.write(output_text)
+    else:
+        Path(output_file).write_text(output_text)
 
 
 def run_proxy(
-    host: str = "0.0.0.0",
+    host: str = "127.0.0.1",
     port: int = 8888,
     target: str = "https://api.openai.com/v1/chat/completions",
-    api_key: Optional[str] = None,
+    api_key: str | None = None,
     compress_context: bool = True,
+    mode: str = "token",
 ) -> None:
     """Start the FastAPI proxy server with dashboard."""
     import uvicorn
@@ -63,6 +68,7 @@ def run_proxy(
         target_url=target,
         api_key=api_key,
         compress_context=compress_context,
+        mode=mode,
     )
 
     key_display = "(set via --api-key or OPENAI_API_KEY)" if proxy.api_key else "(not set — requests will fail)"
@@ -99,11 +105,15 @@ def main() -> None:
 
     # Proxy command
     proxy_parser = subparsers.add_parser("proxy", help="Start the FastAPI proxy server with dashboard")
-    proxy_parser.add_argument("--host", default="0.0.0.0", help="Host to bind (default: 0.0.0.0)")
+    proxy_parser.add_argument("--host", default="127.0.0.1", help="Host to bind (default: 127.0.0.1)")
     proxy_parser.add_argument("--port", type=int, default=8888, help="Port to bind (default: 8888)")
     proxy_parser.add_argument("--target", default=None, help="Target LLM API URL (default: http://127.0.0.1:8080/v1/chat/completions or env LEGROOM_TARGET_URL)")
     proxy_parser.add_argument("--api-key", default=None, help="API key for target service (or use OPENAI_API_KEY env var)")
     proxy_parser.add_argument("--no-compress", action="store_true", help="Disable context compression")
+    proxy_parser.add_argument(
+        "--mode", choices=("token", "cache"), default="token",
+        help="Compression mode: token rewrites history; cache freezes prior items",
+    )
 
     args = parser.parse_args()
 
@@ -114,6 +124,7 @@ def main() -> None:
             target=args.target,
             api_key=args.api_key,
             compress_context=not getattr(args, "no_compress", False),
+            mode=args.mode,
         )
     else:
         # Default: compress mode (for backwards compatibility)
@@ -127,6 +138,7 @@ def main() -> None:
 
         if args.command == "compress":
             compress_stdin(
+                input_file=args.input,
                 model=args.model,
                 output_file=args.output,
                 protect_recent=args.protect_recent,

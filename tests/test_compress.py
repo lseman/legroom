@@ -1,7 +1,8 @@
 """Tests for high-level compress() function."""
 
 import json
-from legroom import compress, CompressConfig
+
+from legroom import CompressConfig, compress
 
 
 def test_compress_basic():

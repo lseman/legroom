@@ -2,29 +2,48 @@
 
 from ._version import __version__
 
-from .config import CompressConfig, CompressResult
+# CCR
+from .ccr.compression_store import CompressionStore
+from .ccr.marker_resolution import create_resolution_prompt, parse_markers, resolve_marker
+from .ccr.tool_injection import (
+    CCRToolInjector,
+    create_ccr_tool_definition,
+    create_system_instructions,
+)
+from .compress import CompressResult as CliCompressResult
+
+# Compression
+from .compress import compress
 from .compressors import (
+    CodeCompressor,
+    CompressInput,
+    CompressionCache,
+    CompressOutput,
     ContentDetector,
     ContentRouter,
-    RouterCompressOutput,
-    CompressionCache,
-    CompressInput,
-    CompressOutput,
+    LogCompressor,
+    LosslessResult,
+    MLTextCompressor,
+    SearchCompressor,
+    SemanticDedup,
+    SemanticDedupResult,
     SmartCrusher,
     SmartCrusherConfig,
-    LogCompressor,
-    SearchCompressor,
-    CodeCompressor,
     TextCompressor,
-    MLTextCompressor,
-    route_embedded_json,
     compact_lossless,
-    LosslessResult,
     compute_optimal_k,
     count_unique_simhash,
+    route_embedded_json,
 )
+from .config import CompressConfig, CompressResult
 from .cross_turn_dedup import DedupBlock, dedup_blocks
-from .query_relevance import extract_query_terms, query_relevance, latest_query_terms
+
+# Pipeline
+from .pipeline import TransformPipeline, TransformResult, create_default_pipeline
+
+# Proxy and dashboard
+from .proxy import LegroomProxy, ProxyState, RequestEvent, get_dashboard_html
+from .query_relevance import extract_query_terms, latest_query_terms, query_relevance
 from .read_lifecycle import (
     ReadLifecycleConfig,
     ReadLifecycleResult,
@@ -32,65 +51,52 @@ from .read_lifecycle import (
     classify_reads,
 )
 
-# Pipeline
-from .pipeline import TransformPipeline, create_default_pipeline, TransformResult
-
-# Compression
-from .compress import compress, CompressResult as CliCompressResult
-
-# CCR
-from .ccr.compression_store import CompressionStore
-from .ccr.marker_resolution import parse_markers, resolve_marker, create_resolution_prompt
-from .ccr.tool_injection import CCRToolInjector, create_ccr_tool_definition, create_system_instructions
-
-# Proxy and dashboard
-from .proxy import LegroomProxy, ProxyState, RequestEvent, get_dashboard_html
-
 __all__ = [
-    "__version__",
-    "CompressConfig",
-    "CompressResult",
+    "CCRToolInjector",
     "CliCompressResult",
-    "ContentDetector",
-    "ContentRouter",
-    "RouterCompressOutput",
-    "CompressionCache",
+    "CodeCompressor",
+    "CompressConfig",
     "CompressInput",
     "CompressOutput",
-    "SmartCrusher",
-    "SmartCrusherConfig",
-    "LogCompressor",
-    "SearchCompressor",
-    "CodeCompressor",
-    "TextCompressor",
-    "MLTextCompressor",
+    "CompressResult",
+    "CompressionCache",
+    "CompressionStore",
+    "ContentDetector",
+    "ContentRouter",
     "DedupBlock",
-    "dedup_blocks",
-    "route_embedded_json",
-    "compact_lossless",
+    "LegroomProxy",
+    "LogCompressor",
     "LosslessResult",
-    "compute_optimal_k",
-    "count_unique_simhash",
-    "extract_query_terms",
-    "query_relevance",
-    "latest_query_terms",
+    "MLTextCompressor",
+    "ProxyState",
     "ReadLifecycleConfig",
     "ReadLifecycleResult",
     "ReadState",
-    "classify_reads",
-    "TransformPipeline",
-    "create_default_pipeline",
-    "TransformResult",
-    "compress",
-    "CompressionStore",
-    "parse_markers",
-    "resolve_marker",
-    "create_resolution_prompt",
-    "CCRToolInjector",
-    "create_ccr_tool_definition",
-    "create_system_instructions",
-    "LegroomProxy",
-    "ProxyState",
     "RequestEvent",
+    "SearchCompressor",
+    "SemanticDedup",
+    "SemanticDedupResult",
+    "SmartCrusher",
+    "SmartCrusherConfig",
+    "TextCompressor",
+    "TransformPipeline",
+    "TransformResult",
+    "__version__",
+    "classify_reads",
+    "compact_lossless",
+    "compress",
+    "compute_optimal_k",
+    "count_unique_simhash",
+    "create_ccr_tool_definition",
+    "create_default_pipeline",
+    "create_resolution_prompt",
+    "create_system_instructions",
+    "dedup_blocks",
+    "extract_query_terms",
     "get_dashboard_html",
+    "latest_query_terms",
+    "parse_markers",
+    "query_relevance",
+    "resolve_marker",
+    "route_embedded_json",
 ]

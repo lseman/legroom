@@ -2,11 +2,10 @@
 
 from __future__ import annotations
 
-import re
 from collections import Counter
 
-from .compressor_registry import CompressInput, CompressOutput
 from ..tokenizer import count_tokens
+from .compressor_registry import CompressOutput
 
 
 class LogCompressor:

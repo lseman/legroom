@@ -5,12 +5,13 @@ from __future__ import annotations
 import re
 from typing import Any
 
-
 _CCR_PATTERNS = [
     # Pattern 1: [N items compressed. hash=abc123]
     re.compile(r"\[(\d+) items? compressed\. hash=([a-f0-9]+)\]"),
     # Pattern 2: <<ccr:abc123>>
     re.compile(r"<<ccr:([a-f0-9]+)>>"),
+    # Pattern 3: read-lifecycle marker
+    re.compile(r"Retrieve original: hash=([a-f0-9]+)"),
 ]
 
 

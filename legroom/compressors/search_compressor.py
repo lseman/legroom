@@ -5,10 +5,10 @@ from __future__ import annotations
 import os
 import re
 from collections import defaultdict
-from typing import Iterable
+from collections.abc import Iterable
 
-from .compressor_registry import CompressInput, CompressOutput
 from ..tokenizer import count_tokens
+from .compressor_registry import CompressOutput
 
 # Below this, factoring out a shared prefix costs more (the "# common: ..."
 # heading) than it saves across the group.

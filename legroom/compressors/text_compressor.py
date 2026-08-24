@@ -17,8 +17,8 @@ import math
 import re
 from collections import Counter, OrderedDict
 
-from .compressor_registry import CompressInput, CompressOutput
 from ..tokenizer import count_tokens
+from .compressor_registry import CompressOutput
 
 # ---------------------------------------------------------------------------
 # Sentence splitting — handles common English abbreviations and edge cases
@@ -309,7 +309,7 @@ class TextCompressor:
         k = max(self.min_sentences, min(int(n * self.keep_ratio), self.max_sentences))
 
         # Top-K indices
-        keep_indices = set(idx for _, idx in scored[:k])
+        keep_indices = {idx for _, idx in scored[:k]}
 
         # Build output: keep top sentences in original order, add summary for omitted
         output_parts: list[str] = []

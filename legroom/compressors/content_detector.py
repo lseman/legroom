@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-import re
 import json
-from typing import Any
+import re
+from typing import ClassVar
 
 
 class ContentDetector:
@@ -17,7 +17,9 @@ class ContentDetector:
         re.MULTILINE,
     )
     SEARCH_PATTERN = re.compile(r"^\S+:\d+:", re.MULTILINE)
-    CODE_KEYWORDS = {"def ", "class ", "import ", "from ", "func ", "struct ", "fn ", "let "}
+    CODE_KEYWORDS: ClassVar[set[str]] = {
+        "def ", "class ", "import ", "from ", "func ", "struct ", "fn ", "let "
+    }
     JSON_PATTERN = re.compile(r"^\s*[\{\[]")
 
     def detect(self, content: str) -> str:

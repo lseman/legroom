@@ -12,18 +12,16 @@ class CompressConfig:
 
     optimize: bool = True
     protect_recent: int = 0
-    max_output_tokens: int = 0
-    max_input_tokens: int = 0
     verbosity_level: int = 2
     # Threshold for token-level retention (ML compressor)
     retention_threshold: float = 0.5
     # Minimum compression ratio to accept (0.0 = always accept)
     min_compression_ratio: float = 0.0
     # Enable/disable specific pipeline phases
-    cache_align_enabled: bool = True
+    cache_align_enabled: bool = False
     compress_enabled: bool = True
     ccr_enabled: bool = True
-    output_shaping: bool = True
+    output_shaping: bool = False
     thinking_compact_enabled: bool = False
     cross_turn_dedup_enabled: bool = True
     read_lifecycle_enabled: bool = True
@@ -31,10 +29,9 @@ class CompressConfig:
     compress_stale: bool = True
     compress_superseded: bool = True
     min_read_lifecycle_bytes: int = 50
-    # Read Maturation settings
-    maturation_enabled: bool = False
-    maturation_quiesce_turns: int = 5
-    maturation_max_hold_turns: int = 50
+    # Raise phase failures instead of falling back. Useful in tests and audits;
+    # the proxy remains fail-open by default.
+    strict: bool = False
     # Salience tracking
     track_salience: bool = True
     # Bias JSON array compression toward items relevant to the latest
@@ -51,6 +48,14 @@ class CompressConfig:
     ml_compress_enabled: bool = False
     ml_model_path: str | None = None
     ml_tokenizer_path: str | None = None
+    # Embedding-based semantic cross-turn dedup — detects paraphrased/
+    # rephrased content across messages. Requires ONNX model files.
+    # Off by default (opt-in) to avoid model download overhead.
+    semantic_dedup_enabled: bool = False
+    semantic_dedup_threshold: float = 0.85
+    semantic_dedup_model_path: str | None = None
+    semantic_dedup_config_path: str | None = None
+    semantic_dedup_vocab_path: str | None = None
 
 
 @dataclass

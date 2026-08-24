@@ -1,23 +1,23 @@
 """Tests for pipeline and compression."""
 
 import json
+
 from legroom import (
-    compress,
     CompressConfig,
-    TransformPipeline,
     ContentRouter,
+    DedupBlock,
+    LosslessResult,
     SmartCrusher,
     SmartCrusherConfig,
-    DedupBlock,
-    dedup_blocks,
-    route_embedded_json,
+    TransformPipeline,
     compact_lossless,
-    LosslessResult,
+    compress,
     compute_optimal_k,
     count_unique_simhash,
+    dedup_blocks,
+    route_embedded_json,
 )
 from legroom.compressors.content_router import CompressionCache
-
 
 # ---------------------------------------------------------------------------
 # Compression tests
@@ -47,7 +47,7 @@ def test_compress_long_content():
     assert result.tokens_after <= result.tokens_before or result.tokens_saved >= 0
 
 
-def test_compress_protect_recent():
+def test_pipeline_preserves_protected_recent_messages():
     """Recent messages should be preserved."""
     long_json = json.dumps([{"id": i} for i in range(100)], indent=2)
     messages = [
@@ -72,7 +72,7 @@ def test_compress_no_optimize():
     assert result.messages == messages
 
 
-def test_compress_empty():
+def test_high_level_compress_empty_input():
     """Empty messages should return empty result."""
     result = compress([], model="gpt-4o")
     assert result.messages == []
@@ -117,7 +117,7 @@ def test_detect_json():
 
     detector = ContentDetector()
     assert detector.detect('{"key": "value"}') == "json"
-    assert detector.detect('[1, 2, 3]') == "json"
+    assert detector.detect("[1, 2, 3]") == "json"
 
 
 def test_detect_code():
@@ -213,7 +213,9 @@ def test_compress_thinking_stripping():
     messages = [
         {"role": "assistant", "content": "<think>Let me think...</think>Answer"},
     ]
-    result = compress(messages, model="gpt-4o", config=CompressConfig(thinking_compact_enabled=True))
+    result = compress(
+        messages, model="gpt-4o", config=CompressConfig(thinking_compact_enabled=True)
+    )
     content = result.messages[0]["content"]
     assert "<think>" not in content or "Answer" in content
 
@@ -273,6 +275,110 @@ def test_compress_inflation_guard():
     assert result.tokens_after <= result.tokens_before
 
 
+def test_fresh_openai_read_is_byte_faithful_for_edit_old_text():
+    """A fresh file Read must remain safe to copy verbatim into an Edit call."""
+    file_content = (
+        "def render(value):\n"
+        "    # spacing and comments are part of the exact edit target\n"
+        "    request_id = '550e8400-e29b-41d4-a716-446655440000'\n"
+        '    return f"value = {value!r}  id={request_id}"\n'
+    ) * 4
+    messages = [
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "read-current-file",
+                    "type": "function",
+                    "function": {
+                        "name": "Read",
+                        "arguments": json.dumps({"file_path": "src/render.py"}),
+                    },
+                }
+            ],
+        },
+        {
+            "role": "tool",
+            "tool_call_id": "read-current-file",
+            "content": file_content,
+        },
+        {"role": "user", "content": "Edit the return expression using exact old_text."},
+    ]
+
+    pipeline = TransformPipeline(cache_align_enabled=True, thinking_compact_enabled=True)
+    result = pipeline.apply(messages, config=CompressConfig(protect_recent=0))
+
+    assert result.messages[1]["content"] == file_content
+    assert result.messages[1]["content"].encode() == file_content.encode()
+
+
+def test_fresh_anthropic_read_block_is_byte_faithful():
+    """Anthropic tool_result blocks receive the same fresh-read guarantee."""
+    file_content = "# exact comment\n\ndef target():\n    return '  keep spaces  '\n" * 4
+    messages = [
+        {
+            "role": "assistant",
+            "content": [
+                {
+                    "type": "tool_use",
+                    "id": "read-anthropic",
+                    "name": "Read",
+                    "input": {"file_path": "src/target.py"},
+                }
+            ],
+        },
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "tool_result",
+                    "tool_use_id": "read-anthropic",
+                    "content": file_content,
+                }
+            ],
+        },
+        {"role": "user", "content": "Apply an exact replacement."},
+    ]
+
+    result = TransformPipeline(cache_align_enabled=True).apply(messages)
+
+    block = result.messages[1]["content"][0]
+    assert block["content"] == file_content
+
+
+def test_read_byte_faithfulness_is_independent_of_lifecycle_compression():
+    """Turning off stale-read compression must not allow generic rewriting."""
+    file_content = "# preserve me exactly\nvalue = '550e8400-e29b-41d4-a716-446655440000'\n" * 4
+    messages = [
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "read-with-lifecycle-off",
+                    "type": "function",
+                    "function": {
+                        "name": "read_file",
+                        "arguments": json.dumps({"path": "src/value.py"}),
+                    },
+                }
+            ],
+        },
+        {
+            "role": "tool",
+            "tool_call_id": "read-with-lifecycle-off",
+            "content": file_content,
+        },
+    ]
+
+    result = TransformPipeline(cache_align_enabled=True).apply(
+        messages, config=CompressConfig(read_lifecycle_enabled=False)
+    )
+
+    assert result.messages[1]["content"] == file_content
+
+
 # ---------------------------------------------------------------------------
 # New module tests
 # ---------------------------------------------------------------------------
@@ -328,7 +434,11 @@ def test_cross_turn_dedup_in_pipeline():
 
 def test_recursive_json_embedded():
     """JSON embedded in larger text should be routed through the compressor."""
-    text = "Here's the result:\n" + json.dumps([{"id": i, "data": "x" * 20} for i in range(15)], indent=2) + "\n\nDone."
+    text = (
+        "Here's the result:\n"
+        + json.dumps([{"id": i, "data": "x" * 20} for i in range(15)], indent=2)
+        + "\n\nDone."
+    )
     from legroom.compressors.content_router import ContentRouter
 
     router = ContentRouter()
@@ -372,11 +482,7 @@ def test_lossless_ansi_strip():
 
 def test_lossless_search_heading():
     """Grep results with same path should get heading compression."""
-    text = (
-        "src/main.py:15:import os\n"
-        "src/main.py:42:print('hello')\n"
-        "src/utils.py:10:import sys\n"
-    )
+    text = "src/main.py:15:import os\nsrc/main.py:42:print('hello')\nsrc/utils.py:10:import sys\n"
     result = compact_lossless(text, content_hint="grep")
     assert isinstance(result, LosslessResult)
 
@@ -384,12 +490,7 @@ def test_lossless_search_heading():
 def test_lossless_diff_strip():
     """Diff index lines should be stripped."""
     text = (
-        "index abc123..def456 100644\n"
-        "--- a/file.txt\n"
-        "+++ b/file.txt\n"
-        "@@ -1,3 +1,3 @@\n"
-        "-old\n"
-        "+new\n"
+        "index abc123..def456 100644\n--- a/file.txt\n+++ b/file.txt\n@@ -1,3 +1,3 @@\n-old\n+new\n"
     )
     result = compact_lossless(text, content_hint="diff")
     assert "index abc123" not in result.compressed
@@ -460,9 +561,15 @@ def test_pipeline_with_all_new_modules():
     """Full pipeline should use all new modules."""
     messages = [
         {"role": "user", "content": "Show me the results"},
-        {"role": "assistant", "content": json.dumps([{"id": i, "data": "x" * 30} for i in range(30)], indent=2)},
+        {
+            "role": "assistant",
+            "content": json.dumps([{"id": i, "data": "x" * 30} for i in range(30)], indent=2),
+        },
         {"role": "user", "content": "Compare these"},
-        {"role": "assistant", "content": json.dumps([{"id": i, "data": "y" * 30} for i in range(30)], indent=2)},
+        {
+            "role": "assistant",
+            "content": json.dumps([{"id": i, "data": "y" * 30} for i in range(30)], indent=2),
+        },
     ]
     result = compress(messages, model="gpt-4o")
     assert result.messages == messages or result.tokens_saved >= 0
@@ -476,22 +583,3 @@ def test_compression_with_embedded_json():
     result = router.compress(text, source_hint="api")
     assert result is not None
     assert result.tokens_saved >= 0
-
-
-if __name__ == "__main__":
-    test_compress_basic()
-    print("test_compress_basic: PASSED")
-
-    test_compress_long_content()
-    print("test_compress_long_content: PASSED")
-
-    test_compress_protect_recent()
-    print("test_compress_protect_recent: PASSED")
-
-    test_compress_with_all_new_modules()
-    print("test_pipeline_with_all_new_modules: PASSED")
-
-    test_compression_with_embedded_json()
-    print("test_compression_with_embedded_json: PASSED")
-
-    print("\nAll new module tests passed!")

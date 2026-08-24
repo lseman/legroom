@@ -3,15 +3,14 @@
 from __future__ import annotations
 
 import json
-import re
-from dataclasses import dataclass, field
-from typing import Any
 from collections import defaultdict
+from dataclasses import dataclass
+from typing import Any
 
-from .adaptive_sizer import compute_optimal_k
-from .compressor_registry import CompressInput, CompressOutput
 from ..query_relevance import query_relevance
 from ..tokenizer import count_tokens
+from .adaptive_sizer import compute_optimal_k
+from .compressor_registry import CompressOutput
 
 
 @dataclass
@@ -259,16 +258,14 @@ class SmartCrusher:
             if len(value) > max_chars:
                 return f"{value[:max_chars // 2]}...{value[-max_chars // 3:]}"
             return value
-        elif isinstance(value, (int, float)):
-            return value
-        elif isinstance(value, bool):
+        elif isinstance(value, (int, float, bool)):
             return value
         elif isinstance(value, (dict, list)):
             # Large nested object — replace with summary
             return {
                 "_truncated": True,
                 "type": "dict" if isinstance(value, dict) else "list",
-                "keys_count": len(value) if isinstance(value, dict) else len(value),
+                "keys_count": len(value),
                 "summary": f"{group_size} items with {len(value)} keys/elements",
             }
         elif value is None:

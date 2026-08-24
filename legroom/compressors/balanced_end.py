@@ -7,12 +7,7 @@ This replaces the Python version with a Numba JIT-compiled version that:
 """
 from __future__ import annotations
 
-import hashlib
 import logging
-from collections import OrderedDict
-from typing import Any, Optional
-
-import numpy as np
 
 logger = logging.getLogger(__name__)
 
@@ -134,7 +129,7 @@ def _get_balanced_end_finder() -> callable:
             return lambda text, start, max_scan: _find_balanced_end_numba(
                 bytearray(text.encode('utf-8')), start, max_scan
             )
-        except Exception:
+        except Exception:  # noqa: BLE001 - Numba exposes backend-specific failures
             logger.warning("Numba balanced-end JIT failed, falling back to Python")
     return _find_balanced_end_python
 

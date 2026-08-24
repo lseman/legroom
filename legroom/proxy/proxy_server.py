@@ -3,94 +3,40 @@
 from __future__ import annotations
 
 import asyncio
-import hashlib
 import json
 import logging
 import os
 import uuid
-from collections import OrderedDict
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-from typing import Any, AsyncIterator
+from typing import Any
+from urllib.parse import urlsplit, urlunsplit
 
 import httpx
-import fastapi
-from fastapi import FastAPI, Response, WebSocket, WebSocketDisconnect, Request
+from fastapi import FastAPI, Request, Response, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
-from fastapi.staticfiles import StaticFiles
 
-from ..config import CompressConfig
-from ..compress import compress
-from .proxy_state import ProxyState
-from ..tokenizer import count_tokens_messages
 from ..ccr.compression_store import CompressionStore
 from ..ccr.tool_injection import create_ccr_tool_definition
+from ..compress import compress
+from ..config import CompressConfig
+from .body_forwarding import select_outbound_body
+from .compression_cache import CachedCompression, CompressionResultCache
+from .headers import filter_request_headers, filter_response_headers
+from .observability import ProxyMetrics
+from .protocols import ProxyMode, compression_view, normalize_mode
+from .proxy_state import ProxyState
 
 _CCR_RETRIEVE_MAX_HOPS = 4
 
 logger = logging.getLogger(__name__)
 
 
-class RequestDedupCache:
-    """LRU cache for deduplicating identical proxy requests.
-
-    Keys by (model, compressed message tuple) and stores the full
-    compressed message list so repeated requests bypass compression.
-    """
-
-    def __init__(self, maxsize: int = 128) -> None:
-        self._cache: OrderedDict[str, list[dict[str, Any]]] = OrderedDict()
-        self._maxsize = maxsize
-        self._hits = 0
-        self._misses = 0
-
-    def _make_key(self, model: str, messages: list[dict[str, Any]]) -> str:
-        """Build a deterministic key from model + message contents."""
-        parts = [model]
-        for msg in messages:
-            content = msg.get("content", "")
-            parts.append(f"{msg.get('role', '?')}:{hashlib.sha256(str(content).encode()).hexdigest()[:24]}")
-        return hashlib.sha256("|".join(parts).encode()).hexdigest()[:32]
-
-    def get(self, model: str, messages: list[dict[str, Any]]) -> list[dict[str, Any]] | None:
-        key = self._make_key(model, messages)
-        if key in self._cache:
-            self._cache.move_to_end(key)
-            self._hits += 1
-            return self._cache[key]
-        self._misses += 1
-        return None
-
-    def put(self, model: str, messages: list[dict[str, Any]], result: list[dict[str, Any]]) -> None:
-        key = self._make_key(model, messages)
-        if key in self._cache:
-            self._cache.move_to_end(key)
-        else:
-            if len(self._cache) >= self._maxsize:
-                self._cache.popitem(last=False)
-        self._cache[key] = result
-
-    @property
-    def hits(self) -> int:
-        return self._hits
-
-    @property
-    def misses(self) -> int:
-        return self._misses
-
-    @property
-    def ratio(self) -> float:
-        total = self._hits + self._misses
-        if total == 0:
-            return 0.0
-        return self._hits / total
-
-    @property
-    def size(self) -> int:
-        return len(self._cache)
-
-    def clear(self) -> None:
-        self._cache.clear()
+def _with_raw_headers(response: Response, headers: list[tuple[bytes, bytes]]) -> Response:
+    """Attach filtered raw headers without collapsing repeated fields."""
+    response.raw_headers = headers
+    return response
 
 
 @asynccontextmanager
@@ -131,6 +77,10 @@ class LegroomProxy:
         compress_context: bool = True,
         max_history: int = 1000,
         cors_origins: list[str] | None = None,
+        max_compression_concurrency: int = 4,
+        mode: str = "token",
+        compression_cache_size: int = 256,
+        compression_cache_ttl: float = 300.0,
     ) -> None:
         # Resolve API key from parameter or environment variable
         self.api_key = _resolve_api_key(api_key)
@@ -143,10 +93,19 @@ class LegroomProxy:
             )
         self.target_url = target_url
         self.compress_context = compress_context
+        self.mode: ProxyMode = normalize_mode(mode)
         self._state = ProxyState(max_history=max_history)
-        self._request_dedup = RequestDedupCache()
+        self._compression_cache = CompressionResultCache(
+            maxsize=compression_cache_size, ttl_seconds=compression_cache_ttl
+        )
+        # Compatibility alias for dashboard callers from pre-P2 releases.
+        self._request_dedup = self._compression_cache
+        self._metrics = ProxyMetrics()
         self._cors_origins = cors_origins
         self._compression_store = CompressionStore()
+        if max_compression_concurrency < 1:
+            raise ValueError("max_compression_concurrency must be at least 1")
+        self._compression_slots = asyncio.Semaphore(max_compression_concurrency)
 
         # Create FastAPI app with lifespan
         self.app = FastAPI(
@@ -179,6 +138,12 @@ class LegroomProxy:
             summary="Proxy request to LLM API",
         )
         self.app.add_api_route(
+            "/v1/responses",
+            self._handle_request,
+            methods=["POST"],
+            summary="Proxy OpenAI Responses request",
+        )
+        self.app.add_api_route(
             "/",
             self._handle_request,
             methods=["POST"],
@@ -191,12 +156,14 @@ class LegroomProxy:
         self.app.add_api_route("/api/read-lifecycle", self._get_read_lifecycle, methods=["GET"])
         self.app.add_api_route("/api/ccr", self._get_ccr_stats, methods=["GET"])
         self.app.add_api_route("/api/cache-stats", self._get_cache_stats, methods=["GET"])
+        self.app.add_api_route("/livez", self._get_liveness, methods=["GET"])
+        self.app.add_api_route("/readyz", self._get_readiness, methods=["GET"])
+        self.app.add_api_route("/metrics", self._get_metrics, methods=["GET"])
 
         # WebSocket for live updates
         self.app.add_api_route("/ws/events", self._websocket_endpoint, methods=["GET"])
 
         # Serve dashboard at root
-        from .proxy_dashboard import get_dashboard_html
         self.app.add_api_route(
             "/",
             self._serve_dashboard,
@@ -210,6 +177,12 @@ class LegroomProxy:
             self._sse_endpoint,
             methods=["GET"],
         )
+        self.app.add_api_route(
+            "/{path:path}",
+            self._handle_request,
+            methods=["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD"],
+            summary="Byte-faithful upstream passthrough",
+        )
 
     async def _serve_dashboard(self, request: Request) -> HTMLResponse:
         """Serve the dashboard HTML."""
@@ -217,211 +190,215 @@ class LegroomProxy:
         return HTMLResponse(content=get_dashboard_html())
 
     async def _handle_request(self, request: Request) -> Response:
-        """Handle incoming proxy request with compression and tracking."""
-        request_id = str(uuid.uuid4())[:8]
-        start_time = __import__("time").time()
-
+        """Compress recognized protocols and transparently forward everything else."""
+        route = request.url.path if request.url.path in {
+            "/v1/chat/completions", "/v1/responses"
+        } else "passthrough"
+        started = self._metrics.begin()
         try:
-            body = await request.json()
-            messages = body.get("messages", [])
-            model = body.get("model", "gpt-4o")
-            is_stream = body.get("stream", False)
+            response = await self._handle_request_inner(request)
+        except BaseException:
+            self._metrics.finish(request.method, route, 500, started)
+            raise
+        response.headers.setdefault("x-legroom-request-id", request.state.request_id)
+        if isinstance(response, StreamingResponse):
+            original_iterator = response.body_iterator
 
-            # Compress if enabled and there are messages
-            if self.compress_context and messages:
-                # Proxy-level request dedup: skip compression for identical requests
-                cached = self._request_dedup.get(model, messages)
-                if cached is not None:
-                    body["messages"] = cached
-                    # count_tokens_messages (not count_tokens) since message
-                    # content may be a content-block list rather than a plain
-                    # string — count_tokens returns 0 for non-string content.
-                    cached_tokens_before = count_tokens_messages(messages, model)
-                    cached_tokens_after = count_tokens_messages(cached, model)
-
-                    # Record stats with accurate counts
-                    self._state.record_request(
-                        request_id=request_id,
-                        model=model,
-                        messages_before=len(messages),
-                        tokens_before=cached_tokens_before,
-                        tokens_after=cached_tokens_after,
-                        transforms_applied=["request_dedup"],
-                        warnings=["cached request"],
+            async def measured_stream() -> AsyncIterator[bytes | str]:
+                try:
+                    async for chunk in original_iterator:
+                        yield chunk
+                finally:
+                    self._metrics.finish(
+                        request.method, route, response.status_code, started
                     )
-                    logger.info(f"Proxy {request_id}: {model} — cached request (dedup hit)")
-                else:
+
+            response.body_iterator = measured_stream()
+        else:
+            self._metrics.finish(request.method, route, response.status_code, started)
+        return response
+
+    async def _handle_request_inner(self, request: Request) -> Response:
+        request_id = str(uuid.uuid4())[:8]
+        request.state.request_id = request_id
+        try:
+            original_body = await request.body()
+            path = request.url.path
+            body: dict[str, Any] | None = None
+            view = None
+            body_mutated = False
+
+            if path in {"/v1/chat/completions", "/v1/responses"}:
+                body = json.loads(original_body)
+                if not isinstance(body, dict):
+                    return JSONResponse(
+                        {"error": {"type": "invalid_request", "message": "JSON body must be an object"}},
+                        status_code=400,
+                    )
+                view = compression_view(path, body, self.mode)
+
+            if self.compress_context and view is not None and view.messages:
+                policy = f"v2:ccr={path == '/v1/chat/completions'}"
+                cache_key = self._compression_cache.key(
+                    protocol=view.protocol,
+                    model=view.model,
+                    mode=self.mode,
+                    messages=view.messages,
+                    policy=policy,
+                )
+                cached = self._compression_cache.get(cache_key)
+                if (
+                    cached is not None
+                    and cached.ccr_hashes
+                    and not self._compression_store.contains_all(cached.ccr_hashes)
+                ):
+                    self._compression_cache.discard(cache_key)
+                    cached = None
+                if cached is None:
                     config = CompressConfig(
                         optimize=True,
-                        protect_recent=2,
-                        compress_enabled=True,
-                        ccr_enabled=True,
+                        protect_recent=0,
+                        ccr_enabled=path == "/v1/chat/completions",
                         read_lifecycle_enabled=True,
                     )
-                    result = compress(
-                        messages,
-                        model=model,
-                        config=config,
-                        compression_store=self._compression_store,
-                    )
+                    async with self._compression_slots:
+                        result = await asyncio.to_thread(
+                            compress,
+                            view.messages,
+                            model=view.model,
+                            config=config,
+                            compression_store=self._compression_store,
+                        )
                     ccr_hashes = result.metadata.get("ccr_hashes") if result.metadata else None
                     if ccr_hashes:
                         self._state.record_ccr_store(len(ccr_hashes))
-
-                    # Update body with compressed messages
-                    body["messages"] = result.messages
-
-                    # Record stats
-                    tokens_before = result.tokens_before
-                    tokens_after = result.tokens_after
-                    self._state.record_request(
-                        request_id=request_id,
-                        model=model,
-                        messages_before=len(messages),
-                        tokens_before=tokens_before,
-                        tokens_after=tokens_after,
-                        transforms_applied=result.transforms_applied,
-                        warnings=result.warnings,
+                    for warning in result.warnings:
+                        if "failed:" in warning.lower():
+                            phase = warning.split(" failed:", 1)[0].lower().replace(" ", "_")
+                            self._metrics.record_error(f"phase_{phase}")
+                    cached = CachedCompression(
+                        messages=result.messages,
+                        tokens_before=result.tokens_before,
+                        tokens_after=result.tokens_after,
+                        transforms=result.transforms_applied,
+                        ccr_hashes=tuple(ccr_hashes or ()),
                     )
+                    self._compression_cache.put(cache_key, cached)
+                    transforms = result.transforms_applied
+                    warnings = result.warnings
+                else:
+                    transforms = [*cached.transforms, "compression_cache_hit"]
+                    warnings = []
 
-                    logger.info(
-                        f"Proxy {request_id}: {model} — "
-                        f"{tokens_before}->{tokens_after} tokens "
-                        f"({result.transforms_applied})"
-                    )
+                body_mutated = view.apply(body, cached.messages)
+                self._state.record_request(
+                    request_id=request_id,
+                    model=view.model,
+                    messages_before=len(view.messages),
+                    tokens_before=cached.tokens_before,
+                    tokens_after=cached.tokens_after,
+                    transforms_applied=transforms,
+                    warnings=warnings,
+                )
+                if cached.has_ccr and path == "/v1/chat/completions":
+                    tools = body.setdefault("tools", [])
+                    names = {
+                        tool.get("function", {}).get("name")
+                        for tool in tools
+                        if isinstance(tool, dict)
+                    }
+                    if "ccr_retrieve" not in names:
+                        tools.append(create_ccr_tool_definition())
+                        body_mutated = True
 
-                    # Store in request dedup cache
-                    self._request_dedup.put(model, messages, result.messages)
-
-                    # Advertise the CCR retrieval tool whenever this request
-                    # contains retrievable markers, streaming or not — the
-                    # pipeline's injected system instructions always mention
-                    # `ccr_retrieve`, so the tool must always be registered
-                    # too or the model is told about a tool the upstream API
-                    # doesn't know about. Streaming responses still can't be
-                    # intercepted and auto-resolved server-side (see the
-                    # is_stream branch below); on streaming, a resulting
-                    # tool_use call is simply forwarded to the caller like
-                    # any other tool call instead of being answered inline.
-                    if ccr_hashes:
-                        tools = body.get("tools")
-                        if tools is None:
-                            tools = []
-                            body["tools"] = tools
-                        existing_names = {
-                            t.get("function", {}).get("name")
-                            if isinstance(t, dict) and "function" in t
-                            else t.get("name")
-                            for t in tools
-                            if isinstance(t, dict)
-                        }
-                        if "ccr_retrieve" not in existing_names:
-                            tools.append(create_ccr_tool_definition())
-
-            # Forward to target LLM API
-            client = self.app.state.http_client
-            headers = dict(request.headers)
+            headers = filter_request_headers(request.headers.raw)
             if self.api_key:
-                headers["Authorization"] = f"Bearer {self.api_key}"
-
-            # Remove hop-by-hop headers
-            headers.pop("host", None)
-            headers.pop("content-length", None)
-            headers.pop("transfer-encoding", None)
+                headers = [(key, value) for key, value in headers if key.lower() != b"authorization"]
+                headers.append((b"authorization", f"Bearer {self.api_key}".encode("latin-1")))
+            outbound = select_outbound_body(
+                body=body or {}, original=original_body, mutated=body_mutated
+            )
+            client = self.app.state.http_client
+            target = self._target_for(request)
+            upstream_request = client.build_request(
+                request.method, target, content=outbound.content, headers=headers
+            )
+            upstream = await client.send(upstream_request, stream=True)
+            is_stream = bool(body and body.get("stream"))
 
             if is_stream:
-                # Streaming mode — forward SSE chunks with proper message boundaries.
-                # The upstream API returns SSE messages terminated by "\n\n". Using
-                # aiter_bytes() alone splits at arbitrary HTTP boundaries which
-                # corrupts the SSE stream and causes clients (e.g. OpenAI SDK)
-                # to report "Stream ended without finish_reason". We buffer
-                # incoming bytes until a complete SSE message is assembled.
-                async def stream_generator():
-                    nonlocal resp_headers
-                    resp_headers = {}
+                async def stream_generator() -> AsyncIterator[bytes]:
+                    try:
+                        async for chunk in upstream.aiter_raw():
+                            yield chunk
+                    finally:
+                        await upstream.aclose()
 
-                    async with client.stream(
-                        "POST",
-                        self.target_url,
-                        json=body,
-                        headers=headers,
-                    ) as resp:
-                        # Forward response headers
-                        resp_headers = {
-                            k: v for k, v in resp.headers.items()
-                            if k.lower() not in ("transfer-encoding", "connection", "content-length")
-                        }
-
-                        # Accumulate bytes; each SSE message ends with "\n\n".
-                        buffer = b""
-                        async for chunk in resp.aiter_bytes():
-                            buffer += chunk
-                            # Split on "\n\n" to extract complete SSE messages.
-                            # The SSE spec requires each message to end with a
-                            # blank line.
-                            while b"\n\n" in buffer:
-                                msg, buffer = buffer.split(b"\n\n", 1)
-                                if msg:
-                                    yield msg + b"\n\n"
-                        # Any remaining bytes are an incomplete SSE message
-                        # (upstream closed mid-message). Forward them anyway
-                        # — dropping them causes "Stream ended without
-                        # finish_reason" errors on the client side.
-                        if buffer:
-                            logger.info(
-                                "SSE stream ended with %d trailing bytes (forwarded)",
-                                len(buffer),
-                            )
-                            yield buffer
-
-                return StreamingResponse(
-                    stream_generator(),
-                    media_type="text/event-stream",
+                response = StreamingResponse(
+                    stream_generator(), status_code=upstream.status_code, media_type=None
                 )
-            else:
-                # Non-streaming mode — collect full response then parse
-                resp = await client.post(
-                    self.target_url,
-                    json=body,
-                    headers=headers,
+                return _with_raw_headers(
+                    response, filter_response_headers(upstream.headers.raw, streaming=True)
                 )
 
-                # Forward response, dropping hop-by-hop headers
-                resp_headers = {
-                    k: v for k, v in resp.headers.items()
-                    if k.lower() not in ("transfer-encoding", "connection", "content-length")
-                }
+            raw_body = b"".join([chunk async for chunk in upstream.aiter_raw()])
+            await upstream.aclose()
+            if path == "/v1/chat/completions" and body and upstream.status_code == 200 and "tools" in body:
                 try:
-                    resp_body = resp.json()
-                except Exception:
-                    resp_body = {"error": {"message": resp.text, "type": "proxy_error"}}
-
-                if resp.status_code == 200 and "tools" in body:
-                    resp_body, resp = await self._resolve_ccr_retrieve_loop(
-                        client, body, resp_body, headers, resp
+                    response_document = json.loads(raw_body)
+                except (json.JSONDecodeError, UnicodeDecodeError):
+                    response_document = None
+                if isinstance(response_document, dict):
+                    response_document, upstream, recalled_body = await self._resolve_ccr_retrieve_loop(
+                        client, body, response_document, headers, upstream, target
                     )
+                    if recalled_body is not None:
+                        raw_body = recalled_body
 
-                body = resp_body
-                return JSONResponse(
-                    content=body,
-                    status_code=resp.status_code,
-                    headers=resp_headers,
-                )
-
-        except Exception as e:
-            logger.error(f"Proxy {request_id} error: {e}")
+            response = Response(content=raw_body, status_code=upstream.status_code)
+            return _with_raw_headers(
+                response, filter_response_headers(upstream.headers.raw, streaming=False)
+            )
+        except (json.JSONDecodeError, UnicodeDecodeError):
             return JSONResponse(
-                content={"error": str(e)},
+                {"error": {"type": "invalid_request", "message": "Request body must be valid UTF-8 JSON"}},
+                status_code=400,
+            )
+        except httpx.TimeoutException:
+            self._metrics.record_error("upstream_timeout")
+            logger.warning("Proxy %s upstream timeout", request_id)
+            return JSONResponse(
+                {"error": {"type": "upstream_timeout", "message": "Upstream request timed out"}},
+                status_code=504,
+            )
+        except httpx.HTTPError as exc:
+            self._metrics.record_error("upstream_transport")
+            logger.warning("Proxy %s upstream transport error: %s", request_id, type(exc).__name__)
+            return JSONResponse(
+                {"error": {"type": "upstream_error", "message": "Upstream request failed"}},
                 status_code=502,
             )
+
+    def _target_for(self, request: Request) -> str:
+        """Resolve a request path against a base URL or legacy full route URL."""
+        target = urlsplit(self.target_url)
+        known = {"/v1/chat/completions", "/v1/responses"}
+        if request.url.path == target.path:
+            path = target.path
+        elif target.path in known:
+            path = request.url.path
+        else:
+            path = f"{target.path.rstrip('/')}/{request.url.path.lstrip('/')}"
+        return urlunsplit((target.scheme, target.netloc, path, request.url.query, ""))
     async def _resolve_ccr_retrieve_loop(
         self,
         client: httpx.AsyncClient,
         request_body: dict[str, Any],
         response_body: dict[str, Any],
-        headers: dict[str, str],
+        headers: list[tuple[bytes, bytes]],
         initial_response: httpx.Response,
-    ) -> tuple[dict[str, Any], httpx.Response]:
+        target_url: str,
+    ) -> tuple[dict[str, Any], httpx.Response, bytes | None]:
         """Resolve any ccr_retrieve tool calls server-side and re-call upstream.
 
         The proxy — not the client agent harness — owns the CCR store, so it
@@ -437,6 +414,7 @@ class LegroomProxy:
         body = dict(request_body)
         resp_body = response_body
         last_resp: httpx.Response = initial_response
+        recalled_body: bytes | None = None
 
         for _ in range(_CCR_RETRIEVE_MAX_HOPS):
             choices = resp_body.get("choices", [])
@@ -481,19 +459,65 @@ class LegroomProxy:
             messages.extend(tool_messages)
             body = {**body, "messages": messages}
 
-            last_resp = await client.post(self.target_url, json=body, headers=headers)
+            outbound = select_outbound_body(body=body, original=b"", mutated=True)
+            retry_headers = [
+                (name, value) for name, value in headers if name.lower() != b"accept-encoding"
+            ]
+            retry_headers.append((b"accept-encoding", b"identity"))
+            retry_request = client.build_request(
+                "POST", target_url, content=outbound.content, headers=retry_headers
+            )
+            last_resp = await client.send(retry_request, stream=True)
+            recalled_body = b"".join([chunk async for chunk in last_resp.aiter_raw()])
+            await last_resp.aclose()
             try:
-                resp_body = last_resp.json()
-            except Exception:
+                resp_body = json.loads(recalled_body)
+            except (json.JSONDecodeError, UnicodeDecodeError):
                 break
             if last_resp.status_code != 200:
                 break
 
-        return resp_body, last_resp
+        return resp_body, last_resp, recalled_body
 
     async def _get_stats(self) -> JSONResponse:
         """Return aggregate stats."""
-        return JSONResponse(content=self._state.get_stats())
+        return JSONResponse(content={
+            **self._state.get_stats(),
+            "mode": self.mode,
+            "inflight_requests": self._metrics.inflight,
+            "uptime_seconds": round(__import__("time").time() - self._metrics.started_at, 3),
+        })
+
+    async def _get_liveness(self) -> JSONResponse:
+        return JSONResponse(content={"service": "legroom-proxy", "alive": True})
+
+    async def _get_readiness(self) -> JSONResponse:
+        client = getattr(self.app.state, "http_client", None)
+        ready = client is not None and not client.is_closed
+        return JSONResponse(
+            content={"service": "legroom-proxy", "ready": ready},
+            status_code=200 if ready else 503,
+        )
+
+    async def _get_metrics(self) -> Response:
+        stats = self._state.get_stats()
+        cache = self._compression_cache
+        operational = self._metrics.render_prometheus()
+        compression = (
+            "# HELP legroom_compression_tokens_total Compression token totals.\n"
+            "# TYPE legroom_compression_tokens_total counter\n"
+            f'legroom_compression_tokens_total{{kind="before"}} {stats["total_tokens_before"]}\n'
+            f'legroom_compression_tokens_total{{kind="after"}} {stats["total_tokens_after"]}\n'
+            f'legroom_compression_tokens_total{{kind="saved"}} {stats["total_tokens_saved"]}\n'
+            "# HELP legroom_compression_cache_requests_total Compression cache lookups.\n"
+            "# TYPE legroom_compression_cache_requests_total counter\n"
+            f'legroom_compression_cache_requests_total{{result="hit"}} {cache.hits}\n'
+            f'legroom_compression_cache_requests_total{{result="miss"}} {cache.misses}\n'
+        )
+        return Response(
+            content=operational + compression,
+            media_type="text/plain; version=0.0.4; charset=utf-8",
+        )
 
     async def _get_history(self, limit: int = 50, offset: int = 0) -> JSONResponse:
         """Return recent request history."""
@@ -514,10 +538,10 @@ class LegroomProxy:
         })
 
     async def _get_cache_stats(self) -> JSONResponse:
-        """Return compression and request dedup cache statistics."""
+        """Return compression-result cache statistics."""
         dedup_cache = self._request_dedup
         return JSONResponse(content={
-            "request_dedup": {
+            "compression_results": {
                 "hits": dedup_cache.hits,
                 "misses": dedup_cache.misses,
                 "size": dedup_cache.size,
@@ -529,15 +553,16 @@ class LegroomProxy:
         """Server-Sent Events endpoint for live updates (WebSocket fallback)."""
 
         async def event_stream() -> AsyncIterator[str]:
-            while True:
-                try:
-                    event = await self._state.get_live_events(timeout=15)
+            queue = self._state.subscribe()
+            try:
+                while True:
+                    event = await self._state.get_live_event(queue, timeout=15)
                     if event:
                         yield f"data: {json.dumps(event)}\n\n"
                     else:
                         yield ": keepalive\n\n"
-                except asyncio.CancelledError:
-                    break
+            finally:
+                self._state.unsubscribe(queue)
 
         resp = StreamingResponse(
             event_stream(),
@@ -554,9 +579,10 @@ class LegroomProxy:
     async def _websocket_endpoint(self, websocket: WebSocket) -> None:
         """WebSocket endpoint for live updates."""
         await websocket.accept()
+        queue = self._state.subscribe()
         try:
             while True:
-                event = await self._state.get_live_events(timeout=30)
+                event = await self._state.get_live_event(queue, timeout=30)
                 if event:
                     await websocket.send_json(event)
                 else:
@@ -564,6 +590,8 @@ class LegroomProxy:
                     await websocket.send_json({"type": "keepalive"})
         except WebSocketDisconnect:
             logger.info("Dashboard WebSocket disconnected")
+        finally:
+            self._state.unsubscribe(queue)
 
     def get_state(self) -> ProxyState:
         """Return the central state tracker."""

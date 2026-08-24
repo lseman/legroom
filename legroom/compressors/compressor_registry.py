@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import hashlib
+import string
+from collections import Counter
 from dataclasses import dataclass, field
 from typing import Any
-
 
 # LRU cache for _compute_salience (avoids recomputing unchanged content).
 # Increased to 1024 for better hit rates in proxy mode where tool outputs repeat.
@@ -43,7 +45,6 @@ def _compute_salience(content: str) -> float:
         return 0.0
 
     # Check cache by content hash (fast path for unchanged messages)
-    import hashlib
     cache_key = hashlib.md5(content.encode()).hexdigest()[:16]
     cached = _salience_cache.get(cache_key)
     if cached is not None:
@@ -57,15 +58,12 @@ def _compute_salience(content: str) -> float:
     n = len(words)
 
     # Clean words for comparison (strip surrounding punctuation)
-    clean_words = [w.lower().strip(".,;:!?\"'()[]{}:;-") for w in words if isinstance(w, str)]
+    clean_words = [w.lower().strip(string.punctuation) for w in words if isinstance(w, str)]
 
     # --- TF-style term weighting ---
     # Count frequency of each unique word.  Rare-but-present words get high
     # weight (like IDF); very common stop-words get zero.
-    from collections import Counter
     freq = Counter(clean_words)
-    total_unique = max(len(freq), 1)
-
     tf_scores = []
     for w in clean_words:
         if w in _STOPWORDS or len(w) < 2:
@@ -146,6 +144,7 @@ class CompressOutput:
     strategy: str = "unknown"
     routing_log: list[dict] = field(default_factory=list)
     metadata: dict[str, Any] = field(default_factory=dict)
+    content_type: str | None = None
 
     @property
     def tokens_saved(self) -> int:

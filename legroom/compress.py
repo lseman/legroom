@@ -4,10 +4,10 @@ from __future__ import annotations
 
 from typing import Any
 
-from .config import CompressConfig, CompressResult
-from .pipeline import TransformPipeline, TransformResult
-from .tokenizer import count_tokens_messages
 from .ccr.compression_store import CompressionStore
+from .config import CompressConfig, CompressResult
+from .pipeline import TransformPipeline
+from .tokenizer import count_tokens_messages
 
 
 def compress(
@@ -38,8 +38,20 @@ def compress(
         if hasattr(cfg, key):
             setattr(cfg, key, value)
 
+    # ``optimize=False`` is the public passthrough contract: no phase may
+    # rewrite caller-owned messages or inject steering/tool instructions.
+    if not cfg.optimize:
+        tokens = count_tokens_messages(messages, model)
+        return CompressResult(
+            messages=messages,
+            tokens_before=tokens,
+            tokens_after=tokens,
+            tokens_saved=0,
+            transforms_applied=[],
+        )
+
     pipeline = TransformPipeline(
-        compress_enabled=cfg.optimize,
+        compress_enabled=cfg.compress_enabled,
         cache_align_enabled=cfg.cache_align_enabled,
         cross_turn_dedup_enabled=cfg.cross_turn_dedup_enabled,
         thinking_compact_enabled=cfg.thinking_compact_enabled,
@@ -54,6 +66,12 @@ def compress(
         ml_retention_threshold=cfg.retention_threshold,
         ml_min_compression_ratio=cfg.min_compression_ratio,
         compression_store=compression_store,
+        semantic_dedup_enabled=cfg.semantic_dedup_enabled,
+        semantic_dedup_threshold=cfg.semantic_dedup_threshold,
+        semantic_dedup_model_path=cfg.semantic_dedup_model_path,
+        semantic_dedup_config_path=cfg.semantic_dedup_config_path,
+        semantic_dedup_vocab_path=cfg.semantic_dedup_vocab_path,
+        strict=cfg.strict,
     )
 
     result = pipeline.apply(messages, model=model, config=cfg)

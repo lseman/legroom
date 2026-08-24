@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-import json
 import hashlib
+import threading
 from typing import Any
 
 
@@ -13,6 +13,7 @@ class CompressionStore:
     def __init__(self, max_entries: int = 1000) -> None:
         self._store: dict[str, dict[str, Any]] = {}
         self._max_entries = max_entries
+        self._lock = threading.RLock()
 
     def store(
         self,
@@ -31,38 +32,45 @@ class CompressionStore:
         """
         content_hash = explicit_hash or hashlib.sha256(original.encode()).hexdigest()[:16]
 
-        self._store[content_hash] = {
-            "original": original,
-            "compressed": compressed,
-            "size_before": len(original),
-            "size_after": len(compressed),
-            "tool_name": tool_name,
-            "tool_call_id": tool_call_id,
-            "compression_strategy": compression_strategy,
-        }
+        with self._lock:
+            self._store[content_hash] = {
+                "original": original,
+                "compressed": compressed,
+                "size_before": len(original),
+                "size_after": len(compressed),
+                "tool_name": tool_name,
+                "tool_call_id": tool_call_id,
+                "compression_strategy": compression_strategy,
+            }
 
-        # Evict oldest if full (simple FIFO)
-        if len(self._store) > self._max_entries:
-            oldest = next(iter(self._store))
-            del self._store[oldest]
+            if len(self._store) > self._max_entries:
+                oldest = next(iter(self._store))
+                del self._store[oldest]
 
         return content_hash
 
     def retrieve(self, hash_key: str) -> str | None:
         """Retrieve original content by hash key."""
-        entry = self._store.get(hash_key)
+        with self._lock:
+            entry = self._store.get(hash_key)
         if entry:
             return entry["original"]
         return None
 
+    def contains_all(self, hash_keys: tuple[str, ...]) -> bool:
+        """Return whether every cached CCR reference is still retrievable."""
+        with self._lock:
+            return all(hash_key in self._store for hash_key in hash_keys)
+
     def get_stats(self) -> dict[str, Any]:
         """Return store statistics."""
-        total_before = sum(e["size_before"] for e in self._store.values())
-        total_after = sum(e["size_after"] for e in self._store.values())
-        return {
-            "entries": len(self._store),
-            "max_entries": self._max_entries,
-            "total_bytes_before": total_before,
-            "total_bytes_after": total_after,
-            "savings": total_before - total_after if total_before > 0 else 0,
-        }
+        with self._lock:
+            total_before = sum(e["size_before"] for e in self._store.values())
+            total_after = sum(e["size_after"] for e in self._store.values())
+            return {
+                "entries": len(self._store),
+                "max_entries": self._max_entries,
+                "total_bytes_before": total_before,
+                "total_bytes_after": total_after,
+                "savings": total_before - total_after if total_before > 0 else 0,
+            }

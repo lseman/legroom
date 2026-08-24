@@ -1,14 +1,12 @@
 """Tests for FastAPI proxy, state management, and dashboard."""
 
-import json
-import time
+import inspect
+
 import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
 
-from legroom.proxy.proxy_state import ProxyState, RequestEvent
-from legroom.proxy.proxy_server import LegroomProxy
 from legroom.proxy.proxy_dashboard import get_dashboard_html
-
+from legroom.proxy.proxy_server import LegroomProxy
+from legroom.proxy.proxy_state import ProxyState
 
 # ---------------------------------------------------------------------------
 # Proxy State tests
@@ -234,7 +232,7 @@ async def test_all_endpoints_registered():
 
 
 @pytest.mark.asyncio
-async def test_sse_endpoint_exists():
+async def test_sse_endpoint_route_exists():
     """SSE endpoint should be registered."""
     proxy = LegroomProxy()
     
@@ -252,8 +250,7 @@ async def test_sse_endpoint_exists():
     
     # Verify the endpoint method exists and is async
     assert hasattr(proxy, "_sse_endpoint")
-    import asyncio
-    assert asyncio.iscoroutinefunction(proxy._sse_endpoint)
+    assert inspect.iscoroutinefunction(proxy._sse_endpoint)
 
 
 # ---------------------------------------------------------------------------
@@ -266,7 +263,7 @@ async def test_cors_middleware_with_origins():
     """Proxy should add CORS middleware when origins are provided."""
     proxy = LegroomProxy(cors_origins=["http://localhost:3000"])
     
-    from fastapi.testclient import TestClient
+    from starlette.testclient import TestClient
     client = TestClient(proxy.app)
     # GET / should return 200 and include CORS header for allowed origin
     resp = client.get("/", headers={"Origin": "http://localhost:3000"})
@@ -279,7 +276,7 @@ async def test_no_cors_without_origins():
     """Proxy should not add CORS middleware by default."""
     proxy = LegroomProxy()
     
-    from fastapi.testclient import TestClient
+    from starlette.testclient import TestClient
     client = TestClient(proxy.app)
     resp = client.options("/", headers={"Origin": "http://evil.com"})
     # Without CORS middleware, Access-Control-Allow-Origin should not be present

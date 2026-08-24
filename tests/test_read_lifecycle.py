@@ -1,14 +1,13 @@
 """Tests for Read Lifecycle — stale/superseded Read compression."""
 
 import json
+
 from legroom import (
-    compress,
     CompressConfig,
     ReadLifecycleConfig,
     classify_reads,
-    ReadLifecycleResult,
+    compress,
 )
-
 
 # ---------------------------------------------------------------------------
 # OpenAI format tests

@@ -9,6 +9,7 @@ from typing import Any
 _MARKERS = [
     re.compile(r"\[(\d+) items? compressed\. hash=([a-f0-9]+)\]"),
     re.compile(r"<<ccr:([a-f0-9]+)>>"),
+    re.compile(r"Retrieve original: hash=([a-f0-9]+)"),
 ]
 
 
@@ -109,9 +110,8 @@ class CCRToolInjector:
                         self._scan_text(value, seen)
 
             for part in message.get("parts", []):
-                if isinstance(part, dict):
-                    if "text" in part:
-                        self._scan_text(part["text"], seen)
+                if isinstance(part, dict) and "text" in part:
+                    self._scan_text(part["text"], seen)
 
         return list(seen)
 

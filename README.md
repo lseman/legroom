@@ -70,7 +70,7 @@ echo '[{"role":"user","content":"Hello"},{"role":"assistant","content":"Hi!"}]' 
 Legroom includes a FastAPI reverse proxy that compresses context on the fly and serves a live dashboard:
 
 ```bash
-# Start proxy (binds to 0.0.0.0:8888)
+# Start proxy (binds safely to 127.0.0.1:8888)
 # Compressed requests are forwarded to 127.0.0.1:8080 (your OpenAI-compatible server)
 export OPENAI_API_KEY=sk-your-key
 legroom proxy
@@ -88,7 +88,7 @@ Then open **http://localhost:8888/** to see the dashboard with:
 
 ```bash
 export OPENAI_API_KEY=sk-your-key  # or use --api-key flag
-legroom proxy --port 8888 --target http://127.0.0.1:8080/v1/chat/completions
+legroom proxy --port 8888 --target http://127.0.0.1:8080 --mode token
 ```
 
 #### Using the proxy as a drop-in replacement
@@ -123,11 +123,16 @@ async with httpx.AsyncClient(base_url="http://127.0.0.1:8080/v1") as client:
 
 | Option | Default | Description |
 |--------|---------|-------------|
-| `--host` | `0.0.0.0` | Host to bind (proxy dashboard + API) |
+| `--host` | `127.0.0.1` | Host to bind (proxy dashboard + API) |
 | `--port` | `8888` | Port to bind (proxy dashboard + API) |
 | `--target` | `http://127.0.0.1:8080/v1/chat/completions` | Target LLM API URL (or env `LEGROOM_TARGET_URL`) |
 | `--api-key` | env var | API key (or env `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `LEGROOM_API_KEY`) |
 | `--no-compress` | false | Disable context compression |
+| `--mode` | `token` | `token` compresses full history; `cache` freezes prior items and compresses only the live item |
+
+The proxy compresses `POST /v1/chat/completions` and message-shaped
+`POST /v1/responses` requests. Other paths, methods, and bodies are forwarded
+byte-for-byte, including binary and non-JSON payloads.
 
 #### Environment variables
 
@@ -147,15 +152,18 @@ async with httpx.AsyncClient(base_url="http://127.0.0.1:8080/v1") as client:
 | `GET /api/history?limit=50&offset=0` | Recent requests |
 | `GET /api/read-lifecycle` | Read lifecycle statistics |
 | `GET /api/ccr` | CCR store statistics |
+| `GET /livez` | Process liveness |
+| `GET /readyz` | HTTP-client readiness |
+| `GET /metrics` | Prometheus request, error, cache, latency, and token metrics |
 | `GET /ws/events` | WebSocket live events |
 | `GET /api/events` | SSE fallback live events |
 
 #### Architecture
 
-The proxy listens on `0.0.0.0:8888` (accessible from all interfaces) and forwards compressed traffic to your OpenAI-compatible server at `127.0.0.1:8080`:
+The proxy listens on `127.0.0.1:8888` by default and forwards compressed traffic to your OpenAI-compatible server at `127.0.0.1:8080`:
 
 ```
-Client → Proxy (0.0.0.0:8888) → OpenAI Server (127.0.0.1:8080)
+Client → Proxy (127.0.0.1:8888) → OpenAI Server (127.0.0.1:8080)
 ```
 
 ## Architecture

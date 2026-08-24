@@ -26,7 +26,7 @@ import logging
 from collections import defaultdict
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Optional
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -36,9 +36,15 @@ _READ_TOOL_NAMES = frozenset({"Read", "read", "read_file"})
 # Tool names that mutate files (make previous Reads stale)
 _MUTATING_TOOL_NAMES = frozenset(
     {
-        "Edit", "edit", "edit_file",
-        "Write", "write", "write_file",
-        "MultiEdit", "NotebookEdit", "apply_patch",
+        "Edit",
+        "edit",
+        "edit_file",
+        "Write",
+        "write",
+        "write_file",
+        "MultiEdit",
+        "NotebookEdit",
+        "apply_patch",
     }
 )
 
@@ -61,8 +67,8 @@ class FileOperation:
     file_path: str
     operation: str  # "read" | "edit" | "write"
     content_size: int = 0
-    read_offset: Optional[int] = None
-    read_limit: Optional[int] = None
+    read_offset: int | None = None
+    read_limit: int | None = None
 
 
 @dataclass
@@ -100,12 +106,13 @@ class ReadLifecycleResult:
     bytes_after: int = 0
     transforms_applied: list[str] = field(default_factory=list)
     ccr_hashes: list[str] = field(default_factory=list)
+    fresh_tool_call_ids: set[str] = field(default_factory=set)
 
 
 def classify_reads(
     messages: list[dict[str, Any]],
     config: ReadLifecycleConfig,
-    compression_store: Optional[Any] = None,
+    compression_store: Any | None = None,
 ) -> ReadLifecycleResult:
     """Apply read lifecycle management to messages.
 
@@ -134,9 +141,7 @@ def classify_reads(
     # eligible for compression, regardless of stale/superseded status — the
     # model may need their exact content (e.g. as `old_string` for an edit)
     # on the very next turn.
-    protected_from = (
-        len(messages) - config.protect_recent if config.protect_recent > 0 else None
-    )
+    protected_from = len(messages) - config.protect_recent if config.protect_recent > 0 else None
     classifications = _classify_reads(file_ops, config, protected_from)
 
     if not classifications:
@@ -303,7 +308,7 @@ def _read_covers(later: FileOperation, earlier: FileOperation) -> bool:
 def _classify_reads(
     file_ops: dict[str, list[FileOperation]],
     config: ReadLifecycleConfig,
-    protected_from: Optional[int] = None,
+    protected_from: int | None = None,
 ) -> list[ReadClassification]:
     """Classify each Read as fresh, stale, or superseded.
 
@@ -333,14 +338,11 @@ def _classify_reads(
                 continue
 
             # Check stale: any edit/write after this read?
-            is_stale = config.compress_stale and any(
-                e.msg_index > read_op.msg_index for e in edits
-            )
+            is_stale = config.compress_stale and any(e.msg_index > read_op.msg_index for e in edits)
 
             # Check superseded: any later read that FULLY COVERS this read's range?
             is_superseded = config.compress_superseded and any(
-                r.msg_index > read_op.msg_index and _read_covers(r, read_op)
-                for r in reads
+                r.msg_index > read_op.msg_index and _read_covers(r, read_op) for r in reads
             )
 
             if is_stale:
@@ -367,7 +369,7 @@ def _apply_lifecycle(
     messages: list[dict[str, Any]],
     classifications: list[ReadClassification],
     config: ReadLifecycleConfig,
-    store: Optional[Any],
+    store: Any | None,
 ) -> ReadLifecycleResult:
     """Replace stale/superseded Read content with markers."""
     # Build lookup: tool_call_id → classification (for non-fresh reads)
@@ -376,13 +378,20 @@ def _apply_lifecycle(
     }
 
     if not replacements:
-        counts = {ReadState.FRESH: len(classifications), ReadState.STALE: 0, ReadState.SUPERSEDED: 0}
+        counts = {
+            ReadState.FRESH: len(classifications),
+            ReadState.STALE: 0,
+            ReadState.SUPERSEDED: 0,
+        }
         return ReadLifecycleResult(
             messages=messages,
             reads_total=len(classifications),
             reads_fresh=counts[ReadState.FRESH],
             reads_stale=counts[ReadState.STALE],
             reads_superseded=counts[ReadState.SUPERSEDED],
+            fresh_tool_call_ids={
+                c.tool_call_id for c in classifications if c.state == ReadState.FRESH
+            },
         )
 
     result_messages: list[dict[str, Any]] = []
@@ -439,6 +448,7 @@ def _apply_lifecycle(
         bytes_after=bytes_after,
         transforms_applied=transforms,
         ccr_hashes=ccr_hashes,
+        fresh_tool_call_ids={c.tool_call_id for c in classifications if c.state == ReadState.FRESH},
     )
 
 
@@ -448,7 +458,7 @@ def _process_anthropic_blocks(
     transforms: list[str],
     ccr_hashes: list[str],
     config: ReadLifecycleConfig,
-    store: Optional[Any],
+    store: Any | None,
 ) -> tuple[list[Any], bool]:
     """Process Anthropic-format content blocks for lifecycle replacement."""
     new_blocks = []
@@ -486,8 +496,8 @@ def _replace_content(
     content: str,
     classification: ReadClassification,
     config: ReadLifecycleConfig,
-    store: Optional[Any],
-) -> tuple[bool, str, Optional[str]]:
+    store: Any | None,
+) -> tuple[bool, str, str | None]:
     """Replace Read content with a lifecycle marker."""
     content_bytes = len(content.encode("utf-8"))
 
@@ -509,8 +519,9 @@ def _replace_content(
                 compression_strategy=f"read_lifecycle:{classification.state.value}",
                 explicit_hash=ccr_hash,
             )
-        except Exception:
-            pass  # Storage failure must not break compression
+        except Exception as exc:  # noqa: BLE001 - storage adapters may raise custom errors
+            logger.warning("CCR storage failed; preserving original read content: %s", exc)
+            return False, content, None
 
     file_display = classification.file_path or "unknown"
 

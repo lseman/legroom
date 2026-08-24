@@ -9,12 +9,8 @@ behind a marker without being presented with broken text.
 
 from __future__ import annotations
 
-import math
-import re
-from typing import Any, Optional
-
-from .compressor_registry import CompressInput, CompressOutput
 from ..tokenizer import count_tokens
+from .compressor_registry import CompressOutput
 
 try:
     import onnxruntime as ort
@@ -57,8 +53,8 @@ class MLTextCompressor:
         self._model_path = model_path or "models/kompress-v2-base/onnx/kompress-fp32.onnx"
         self._tokenizer_path = tokenizer_path or "models/kompress-v2-base/tokenizer.json"
 
-        self._session: Optional[ort.InferenceSession] = None
-        self._tokenizer: Optional[HfTokenizer] = None
+        self._session: ort.InferenceSession | None = None
+        self._tokenizer: HfTokenizer | None = None
         self._retention_threshold = retention_threshold
         self._min_compression_ratio = min_compression_ratio
         self._min_run_length = min_run_length
@@ -73,7 +69,7 @@ class MLTextCompressor:
                 providers=["CPUExecutionProvider"],
             )
             self._tokenizer = HfTokenizer.from_file(self._tokenizer_path)
-        except Exception:
+        except Exception:  # noqa: BLE001 - ONNX/tokenizer backends use custom exceptions
             self._session = None
             self._tokenizer = None
 
@@ -120,7 +116,7 @@ class MLTextCompressor:
 
             scores = outputs[0][0]  # shape: (1, seq_len)
 
-        except Exception:
+        except Exception:  # noqa: BLE001 - inference backends use custom exceptions
             return CompressOutput(
                 compressed=content,
                 original_token_count=count_tokens(content, model),
@@ -220,7 +216,7 @@ class MLTextCompressor:
                 try:
                     span_text = self._tokenizer.decode(chunk_ids, skip_special_tokens=True)
                     char_est = len(span_text)
-                except Exception:
+                except Exception:  # noqa: BLE001 - tokenizer backends use custom exceptions
                     char_est = run_len * 4
                 total_chars_compressed += char_est
                 kept_text_parts.append(_COMPRESS_MARKER.format(chars=char_est))

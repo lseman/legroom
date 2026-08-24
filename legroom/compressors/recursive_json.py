@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 import json
-from typing import Callable
+from collections.abc import Callable
 
-from .balanced_end import find_balanced_end, _HAS_NUMBA
+from .balanced_end import find_balanced_end
 
 
 def route_embedded_json(

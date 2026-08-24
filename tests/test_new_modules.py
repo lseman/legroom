@@ -1,19 +1,19 @@
 """Tests for new compression modules: cross-turn dedup, recursive JSON, lossless compaction, adaptive sizer."""
 
 import json
+
 from legroom import (
-    compress,
     CompressConfig,
-    dedup_blocks,
     DedupBlock,
-    route_embedded_json,
-    compact_lossless,
     LosslessResult,
+    compact_lossless,
+    compress,
     compute_optimal_k,
     count_unique_simhash,
+    dedup_blocks,
+    route_embedded_json,
 )
 from legroom.compressors.content_router import ContentRouter
-
 
 # ---------------------------------------------------------------------------
 # Cross-turn dedup

@@ -8,13 +8,11 @@ proxy handler and the dashboard API.
 from __future__ import annotations
 
 import asyncio
-import time
-import json
 import logging
+import time
+from collections import Counter, deque
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
-from typing import Any, Optional
-from collections import deque
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -80,20 +78,12 @@ class ProxyState:
     total_ccr_retrieved: int = 0
 
     # Compression strategy counts
-    strategy_counts: dict[str, int] = field(default_factory=lambda: {
-        "smart_crusher": 0,
-        "log_compressor": 0,
-        "search_compressor": 0,
-        "code_compressor": 0,
-        "cross_turn_dedup": 0,
-        "read_lifecycle": 0,
-        "lossless_compaction": 0,
-        "recursive_json": 0,
-        "ml_compressor": 0,
-    })
+    strategy_counts: Counter[str] = field(default_factory=Counter)
 
-    # Live event queue (for WebSocket/SSE)
-    _event_queue: asyncio.Queue[dict[str, Any]] = field(default_factory=asyncio.Queue)
+    # Each live client owns a bounded queue so events are broadcast rather
+    # than divided among consumers. Slow clients lose their oldest event.
+    _subscribers: set[asyncio.Queue[dict[str, Any]]] = field(default_factory=set)
+    dropped_live_events: int = 0
 
     # Last updated timestamp
     last_updated: float = field(default_factory=time.time)
@@ -107,8 +97,8 @@ class ProxyState:
         tokens_after: int,
         transforms_applied: list[str],
         warnings: list[str],
-        read_lifecycle_stats: Optional[dict[str, Any]] = None,
-        compression_details: Optional[list[dict[str, Any]]] = None,
+        read_lifecycle_stats: dict[str, Any] | None = None,
+        compression_details: list[dict[str, Any]] | None = None,
     ) -> RequestEvent:
         """Record a compression request event."""
         tokens_saved = tokens_before - tokens_after
@@ -142,8 +132,7 @@ class ProxyState:
 
         # Update strategy counts
         for transform in transforms_applied:
-            if transform in self.strategy_counts:
-                self.strategy_counts[transform] += 1
+            self.strategy_counts[transform] += 1
 
         # Update read lifecycle stats
         if read_lifecycle_stats:
@@ -161,21 +150,23 @@ class ProxyState:
 
     def _emit_event(self, event: RequestEvent) -> None:
         """Emit a live event to the queue."""
-        try:
-            self._event_queue.put_nowait({
-                "type": "request",
-                "data": {
-                    "request_id": event.request_id,
-                    "timestamp": event.timestamp,
-                    "model": event.model,
-                    "tokens_before": event.tokens_before,
-                    "tokens_after": event.tokens_after,
-                    "tokens_saved": event.tokens_saved,
-                    "transforms": event.transforms_applied,
-                },
-            })
-        except Exception:
-            pass  # Dashboard not listening
+        payload = {
+            "type": "request",
+            "data": {
+                "request_id": event.request_id,
+                "timestamp": event.timestamp,
+                "model": event.model,
+                "tokens_before": event.tokens_before,
+                "tokens_after": event.tokens_after,
+                "tokens_saved": event.tokens_saved,
+                "transforms": event.transforms_applied,
+            },
+        }
+        for queue in tuple(self._subscribers):
+            if queue.full():
+                queue.get_nowait()
+                self.dropped_live_events += 1
+            queue.put_nowait(payload)
 
     def record_ccr_store(self, count: int = 1) -> None:
         """Record a CCR store operation."""
@@ -217,6 +208,8 @@ class ProxyState:
             "total_ccr_retrieved": self.total_ccr_retrieved,
             "strategy_counts": dict(self.strategy_counts),
             "last_updated": self.last_updated,
+            "live_subscribers": len(self._subscribers),
+            "dropped_live_events": self.dropped_live_events,
         }
 
     def get_history(self, limit: int = 50, offset: int = 0) -> list[dict[str, Any]]:
@@ -241,9 +234,21 @@ class ProxyState:
             ),
         }
 
-    async def get_live_events(self, timeout: float = 10) -> Optional[dict[str, Any]]:
+    def subscribe(self, max_events: int = 128) -> asyncio.Queue[dict[str, Any]]:
+        if max_events < 1:
+            raise ValueError("max_events must be positive")
+        queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue(maxsize=max_events)
+        self._subscribers.add(queue)
+        return queue
+
+    def unsubscribe(self, queue: asyncio.Queue[dict[str, Any]]) -> None:
+        self._subscribers.discard(queue)
+
+    async def get_live_event(
+        self, queue: asyncio.Queue[dict[str, Any]], timeout: float = 10
+    ) -> dict[str, Any] | None:
         """Get live events from the queue (for WebSocket)."""
         try:
-            return await asyncio.wait_for(self._event_queue.get(), timeout=timeout)
+            return await asyncio.wait_for(queue.get(), timeout=timeout)
         except asyncio.TimeoutError:
             return None
