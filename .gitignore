@@ -2,7 +2,6 @@
 __pycache__/
 *.py[cod]
 *$py.class
-*.so
 
 # Virtual environment
 .venv/
@@ -26,7 +25,29 @@ models/
 # Build/dist
 dist/
 build/
-*.egg-info/
 
 # Logs
 *.log
+.logician/
+
+# Testing & coverage
+.pytest_cache/
+.ruff_cache/
+.hypothesis/
+htmlcov/
+.coverage
+coverage.xml
+*.coverage
+
+# Type checking
+.mypy_cache/
+
+# Eggs
+*.egg
+.eggs/
+
+# Build artifacts
+*.pyc
+*.pyo
+*.so.*
+*.wasm
