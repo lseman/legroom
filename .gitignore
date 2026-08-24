@@ -45,6 +45,8 @@ coverage.xml
 # Eggs
 *.egg
 .eggs/
+*.egg-info/
+*.egg_info/
 
 # Build artifacts
 *.pyc
