@@ -17,6 +17,11 @@ class ProxyMetrics:
         default_factory=lambda: defaultdict(list)
     )
     inflight: int = 0
+    # Aggregate token counters (used by SDK worker)
+    total_requests: int = 0
+    total_tokens_before: int = 0
+    total_tokens_after: int = 0
+    total_tokens_saved: int = 0
     cache_input_tokens: int = 0
     cache_write_tokens: int = 0
     cache_read_tokens: int = 0
@@ -27,6 +32,7 @@ class ProxyMetrics:
     phase_status: Counter[tuple[str, str]] = field(default_factory=Counter)
     phase_latency_ms: dict[str, float] = field(default_factory=lambda: defaultdict(float))
     phase_token_delta: dict[str, int] = field(default_factory=lambda: defaultdict(int))
+    strategy_counts: Counter[str] = field(default_factory=Counter)
 
     def begin(self) -> float:
         self.inflight += 1
