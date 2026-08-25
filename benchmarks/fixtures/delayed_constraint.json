@@ -1,0 +1,14 @@
+{
+  "description": "A coding-agent trace where an early compatibility constraint becomes relevant after several tool calls.",
+  "messages": [
+    {"role": "user", "content": "Add CSV export to the report command. It must remain compatible with Python 3.10 and must not add a pandas dependency."},
+    {"role": "assistant", "content": "I will inspect the command and its tests before changing it."},
+    {"role": "tool", "tool_call_id": "call_1", "content": "src/report.py:12:def render_report(rows, output_format='text'):\nsrc/report.py:13:    if output_format == 'json':\nsrc/report.py:14:        return json.dumps(rows)\nsrc/report.py:15:    return render_table(rows)"},
+    {"role": "assistant", "content": "The formatter currently handles text and JSON in one function. I will inspect packaging constraints."},
+    {"role": "tool", "tool_call_id": "call_2", "content": "[project]\nrequires-python = \">=3.10\"\ndependencies = [\"click>=8\", \"rich>=13\"]"},
+    {"role": "assistant", "content": "The package confirms Python 3.10 support and has no dataframe dependency. I will inspect CSV-related tests."},
+    {"role": "tool", "tool_call_id": "call_3", "content": "tests/test_report.py:44:def test_json_export():\ntests/test_report.py:45:    assert render_report([{\"id\": 1}], 'json') == '[{\"id\": 1}]'"},
+    {"role": "assistant", "content": "There is no CSV test yet. The standard library csv module can implement this without changing dependencies."},
+    {"role": "user", "content": "Go ahead. What implementation constraints must the patch preserve?"}
+  ]
+}

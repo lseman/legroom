@@ -1,10 +1,68 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "name": "legroom-agent-traces-v1",
   "fixtures": [
-    {"path": "fixtures/coding_agent_reads.json", "expected_terms": ["paginate.py", "total_pages", "page_size", "ValueError"]},
-    {"path": "fixtures/grep_results.json", "expected_terms": ["CompressConfig", "proxy_server.py", "protect_recent"]},
-    {"path": "fixtures/json_tool_results.json", "expected_terms": ["acct_4471", "ord_9004", "ord_9013", "cancelled", "refunded"]},
-    {"path": "fixtures/log_dump.json", "expected_terms": ["ERROR", "ord_2", "ord_5", "timeout", "max retries"]}
+    {
+      "path": "fixtures/coding_agent_reads.json",
+      "expected_terms": ["paginate.py", "total_pages", "page_size", "ValueError"],
+      "checks": [
+        {"name": "latest read call id", "path": [10, "tool_call_id"], "expected": "call_5"},
+        {"name": "current turn exact", "path": [11, "content"], "expected": "Good, the fix is in place and matches what the test expects. Running the test suite now."}
+      ]
+    },
+    {
+      "path": "fixtures/grep_results.json",
+      "expected_terms": ["CompressConfig", "proxy_server.py", "protect_recent"],
+      "checks": [
+        {"name": "search call id", "path": [2, "tool_call_id"], "expected": "call_1"}
+      ]
+    },
+    {
+      "path": "fixtures/json_tool_results.json",
+      "expected_terms": ["acct_4471", "ord_9004", "ord_9013", "cancelled", "refunded"],
+      "checks": [
+        {"name": "ticket lookup call id", "path": [6, "tool_call_id"], "expected": "call_2"}
+      ]
+    },
+    {
+      "path": "fixtures/log_dump.json",
+      "expected_terms": ["ERROR", "ord_2", "ord_5", "timeout", "max retries"],
+      "checks": [
+        {"name": "current request exact", "path": [2, "content"], "expected": "Sure, and can you also check if this correlates with a specific deploy?"}
+      ]
+    },
+    {
+      "path": "fixtures/delayed_constraint.json",
+      "expected_terms": ["Python 3.10", "pandas", "standard library", "csv"],
+      "checks": [
+        {"name": "dependency constraint source", "path": [0, "content"], "expected": "Add CSV export to the report command. It must remain compatible with Python 3.10 and must not add a pandas dependency."},
+        {"name": "current question exact", "path": [-1, "content"], "expected": "Go ahead. What implementation constraints must the patch preserve?"}
+      ]
+    },
+    {
+      "path": "fixtures/negative_finding.json",
+      "expected_terms": ["dpl_882", "08:47:12Z", "09:03:18Z", "no errors overlap", "causation"],
+      "checks": [
+        {"name": "anti-causation instruction", "path": [0, "content"], "expected": "Investigate whether deploy dpl_882 caused the checkout errors. Do not claim causation without overlapping timestamps."},
+        {"name": "negative finding", "path": [5, "content"], "expected": "The first observed error began 16 minutes and 6 seconds after the deployment finished; no errors overlap the deployment window."}
+      ]
+    }
+  ],
+  "strategies": [
+    {
+      "name": "legroom_no_read_lifecycle",
+      "base": "legroom",
+      "config": {"read_lifecycle_enabled": false}
+    },
+    {
+      "name": "legroom_no_cross_turn_dedup",
+      "base": "legroom",
+      "config": {"cross_turn_dedup_enabled": false}
+    },
+    {
+      "name": "legroom_no_query_awareness",
+      "base": "legroom",
+      "config": {"query_aware": false}
+    }
   ]
 }

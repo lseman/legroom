@@ -21,7 +21,10 @@ class CompressConfig:
     # Values below 0.15 are usually noise removal, not real compression.
     min_compression_ratio: float = 0.15
     # Enable/disable specific pipeline phases
-    cache_align_enabled: bool = True
+    # Destructive normalization of volatile values can improve stable-prefix
+    # cache reuse, but timestamps, UUIDs, and similar values may be task
+    # evidence.  Keep it explicitly opt-in.
+    cache_align_enabled: bool = False
     compress_enabled: bool = True
     ccr_enabled: bool = True
     output_shaping: bool = False

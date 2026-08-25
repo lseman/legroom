@@ -28,7 +28,7 @@ class CalibrationSnapshot:
     samples: int
     success_rate: float
     success_lower_bound: float
-    mean_quality: float
+    mean_quality: float | None
     disabled: bool
 
 
@@ -37,19 +37,23 @@ class CalibrationController:
 
     def __init__(self, config: CalibrationConfig | None = None) -> None:
         self.config = config or CalibrationConfig()
-        self._samples: dict[str, deque[tuple[bool, float]]] = defaultdict(
+        self._samples: dict[str, deque[tuple[bool, float | None]]] = defaultdict(
             lambda: deque(maxlen=self.config.window_size)
         )
 
-    def record(self, report: dict[str, Any], *, quality: float = 1.0) -> None:
-        if not 0 <= quality <= 1:
+    def record(self, report: dict[str, Any], *, quality: float | None = None) -> None:
+        if quality is not None and not 0 <= quality <= 1:
             raise ValueError("quality must be between 0 and 1")
         name = _canonical_name(str(report.get("name", "unknown")))
         status = report.get("status")
-        successful = status in {"applied", "skipped"} and quality >= self.config.minimum_quality
+        successful = status in {"applied", "skipped"} and (
+            quality is None or quality >= self.config.minimum_quality
+        )
         self._samples[name].append((successful, quality))
 
-    def record_reports(self, reports: list[dict[str, Any]], *, quality: float = 1.0) -> None:
+    def record_reports(
+        self, reports: list[dict[str, Any]], *, quality: float | None = None
+    ) -> None:
         for report in reports:
             self.record(report, quality=quality)
 
@@ -65,13 +69,16 @@ class CalibrationController:
         count = len(samples)
         successes = sum(success for success, _ in samples)
         rate = successes / count if count else 1.0
-        quality = sum(value for _, value in samples) / count if count else 1.0
+        quality_values = [value for _, value in samples if value is not None]
+        quality = (
+            sum(quality_values) / len(quality_values) if quality_values else None
+        )
         lower = _wilson_lower_bound(successes, count)
         disabled = (
             count >= self.config.min_samples
             and (
                 lower < self.config.minimum_success_rate
-                or quality < self.config.minimum_quality
+                or (quality is not None and quality < self.config.minimum_quality)
             )
         )
         return CalibrationSnapshot(normalized, count, rate, lower, quality, disabled)

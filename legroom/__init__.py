@@ -50,6 +50,14 @@ from .read_lifecycle import (
     ReadState,
     classify_reads,
 )
+from .task_replay import (
+    SubprocessTaskRunner,
+    TaskReplayRequest,
+    TaskRunner,
+    TaskRunnerEvaluator,
+    TaskRunnerProtocolError,
+    TaskRunResult,
+)
 
 __all__ = [
     "CCRToolInjector",
@@ -78,6 +86,12 @@ __all__ = [
     "SemanticDedupResult",
     "SmartCrusher",
     "SmartCrusherConfig",
+    "SubprocessTaskRunner",
+    "TaskReplayRequest",
+    "TaskRunResult",
+    "TaskRunner",
+    "TaskRunnerEvaluator",
+    "TaskRunnerProtocolError",
     "TextCompressor",
     "TransformPipeline",
     "TransformResult",

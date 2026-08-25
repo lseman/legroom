@@ -1,0 +1,12 @@
+{
+  "description": "An operations trace where the important evidence is that a suspected event did not occur.",
+  "messages": [
+    {"role": "user", "content": "Investigate whether deploy dpl_882 caused the checkout errors. Do not claim causation without overlapping timestamps."},
+    {"role": "assistant", "content": "I will compare the deployment window with the first and last checkout errors."},
+    {"role": "tool", "tool_call_id": "call_1", "content": "deploy=dpl_882 started=2026-08-24T08:41:00Z finished=2026-08-24T08:47:12Z status=success"},
+    {"role": "assistant", "content": "Now I will retrieve checkout errors around that period."},
+    {"role": "tool", "tool_call_id": "call_2", "content": "2026-08-24T09:03:18Z ERROR checkout timeout order=ord_71\n2026-08-24T09:04:02Z ERROR checkout timeout order=ord_72\n2026-08-24T09:08:44Z ERROR checkout retries_exhausted order=ord_73"},
+    {"role": "assistant", "content": "The first observed error began 16 minutes and 6 seconds after the deployment finished; no errors overlap the deployment window."},
+    {"role": "user", "content": "Summarize the evidence and state whether this trace establishes causation."}
+  ]
+}

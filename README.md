@@ -25,6 +25,12 @@ reports:
 - p50/p95 latency and peak traced memory;
 - per-fixture, per-strategy results in Markdown or machine-readable JSON.
 
+Quality scores carry explicit evidence provenance: `heuristic`, `model_graded`,
+or `task_verified`. The bundled suite uses deterministic retention and exact-value
+checks, so it is deliberately labelled `heuristic`; callers can supply an executable
+`TaskEvaluator` to record downstream task-verified evidence. Unknown live quality is
+never reported as a perfect score.
+
 Run it yourself with `python benchmarks/run_benchmark.py`, or produce a stable
 artifact with `python benchmarks/run_benchmark.py --json`. The suite manifest
 is [`benchmarks/suite-v1.json`](benchmarks/suite-v1.json); results are measured
@@ -33,7 +39,7 @@ on the current checkout rather than copied from a separate installation.
 ## How it compresses
 
 - **SmartCrusher** — JSON array deduplication and summarization, with SimHash-based near-duplicate detection to auto-size how much to keep
-- **CacheAligner** — Detects UUIDs, timestamps, JWTs that bust KV cache
+- **CacheAligner** — Opt-in normalization of UUIDs, timestamps, and JWTs that bust KV cache; disabled by default because volatile values may be task evidence
 - **ThinkingCompactor** — Strips `<think>...</think>` reasoning blocks
 - **ContentRouter** — Dispatches to the best compressor (JSON, logs, search, code)
 - **Cross-Turn Dedup** — Replaces identical spans across messages with in-context pointers
@@ -261,7 +267,56 @@ Fixtures live in [`benchmarks/fixtures/`](benchmarks/fixtures/) as plain `{"desc
 
 Task-success markers and suite membership live in the versioned suite manifest,
 separate from trace payloads. This makes corpus changes reviewable and prevents
-silent benchmark drift.
+silent benchmark drift. Schema-v2 manifests can also declare exact JSON-path checks
+and named Legroom ablations. The default suite includes delayed-constraint and
+negative-finding traces for facts whose importance only becomes apparent later.
+
+Run every declared strategy, or select a comparison explicitly:
+
+```bash
+python benchmarks/run_benchmark.py --strategies \
+  identity,legroom,legroom_no_read_lifecycle
+```
+
+### Downstream task replay
+
+For executable agent, patch, or repository-test evidence, explicitly supply a
+JSON-over-stdio runner. Suite manifests never execute commands on their own:
+
+```bash
+python benchmarks/run_benchmark.py \
+  --strategies identity,legroom \
+  --task-runner-command "python /path/to/my_task_runner.py" \
+  --task-runner-timeout 600
+```
+
+The runner receives a single JSON object on stdin:
+
+```json
+{
+  "schema_version": 1,
+  "fixture": "coding_agent_reads",
+  "description": "...",
+  "original_messages": [],
+  "compressed_messages": [],
+  "task": {}
+}
+```
+
+It must write one result object to stdout:
+
+```json
+{
+  "score": 1.0,
+  "passed": true,
+  "details": {"tests_passed": 12, "tests_total": 12}
+}
+```
+
+The optional fixture-level `task` object is inert metadata for the runner, such
+as a repository fixture, expected tool action, or test command. The adapter does
+not invoke a shell, rejects malformed results, bounds captured output, and turns
+timeouts or ordinary non-zero task exits into failed `task_verified` evidence.
 
 ## Model Integration
 

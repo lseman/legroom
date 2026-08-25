@@ -300,7 +300,7 @@ class LegroomProxy:
                             config=config,
                             compression_store=self._compression_store,
                         )
-                    quality = 1.0
+                    quality: float | None = None
                     if self._quality_evaluator is not None:
                         try:
                             quality = self._quality_evaluator(view.messages, result.messages)
@@ -324,7 +324,10 @@ class LegroomProxy:
                         if "failed:" in warning.lower():
                             phase = warning.split(" failed:", 1)[0].lower().replace(" ", "_")
                             self._metrics.record_error(f"phase_{phase}")
-                    if quality < self._calibration.config.minimum_quality:
+                    if (
+                        quality is not None
+                        and quality < self._calibration.config.minimum_quality
+                    ):
                         cached = CachedCompression(
                             messages=view.messages,
                             tokens_before=result.tokens_before,
