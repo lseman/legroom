@@ -10,16 +10,16 @@ from __future__ import annotations
 from collections.abc import Mapping
 from copy import deepcopy
 from dataclasses import dataclass, replace
-from enum import Enum
-from typing import Any, Literal, TypeAlias
+from enum import StrEnum
+from typing import Any, Literal
 
-JSONValue: TypeAlias = (
-    None | bool | int | float | str | list["JSONValue"] | dict[str, "JSONValue"]
+type JSONValue = (
+    bool | int | float | str | list["JSONValue"] | dict[str, "JSONValue"] | None
 )
 ContentShape = Literal["missing", "string", "blocks", "opaque"]
 
 
-class Provenance(str, Enum):
+class Provenance(StrEnum):
     TRUSTED = "trusted"
     USER = "user"
     MODEL = "model"
@@ -27,7 +27,7 @@ class Provenance(str, Enum):
     PROVIDER = "provider"
 
 
-class CompressionRisk(str, Enum):
+class CompressionRisk(StrEnum):
     IMMUTABLE = "immutable"
     EXACT = "exact"
     HIGH = "high"
@@ -51,7 +51,7 @@ class OpaqueBlock:
     raw: Any
 
 
-ContentBlock: TypeAlias = TextBlock | OpaqueBlock
+type ContentBlock = TextBlock | OpaqueBlock
 
 
 @dataclass(frozen=True)

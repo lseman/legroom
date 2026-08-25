@@ -83,7 +83,7 @@ class _SimpleTokenizer:
     def __init__(self, vocab_path: str) -> None:
         self._vocab: dict[str, int] = {}
         try:
-            with open(vocab_path, "r", encoding="utf-8") as f:
+            with open(vocab_path, encoding="utf-8") as f:
                 for line in f:
                     parts = line.strip().split("\t")
                     if parts:
@@ -130,7 +130,7 @@ def _cosine_similarity(a: list[float], b: list[float]) -> float:
     """Compute cosine similarity between two vectors."""
     if not a or not b:
         return 0.0
-    dot = sum(x * y for x, y in zip(a, b))
+    dot = sum(x * y for x, y in zip(a, b, strict=False))
     norm_a = sum(x * x for x in a) ** 0.5
     norm_b = sum(x * x for x in b) ** 0.5
     if norm_a == 0 or norm_b == 0:
@@ -486,7 +486,7 @@ class SemanticDedup:
             # is too small to possibly reach the similarity threshold.
             best_sim = 0.0
             best_idx = -1
-            for j, (prev_embed, prev_content, prev_words) in known.items():
+            for j, (prev_embed, _prev_content, prev_words) in known.items():
                 # Quick Jaccard check
                 if not prev_words:
                     continue

@@ -7,7 +7,7 @@ name = "legroom"
 dynamic = ["version"]
 description = "Context compression proxy — reduces LLM context tokens while preserving meaning"
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.12"
 license = "MIT"
 dependencies = [
     "tiktoken>=0.7.0",
@@ -46,6 +46,7 @@ include = ["legroom*"]
 [project.scripts]
 legroom = "legroom.cli:main"
 legroom-proxy = "legroom.cli:run_proxy"
+legroom-sdk = "legroom.sdk_worker:main"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
@@ -53,7 +54,7 @@ asyncio_mode = "auto"
 pythonpath = ["."]
 
 [tool.mypy]
-python_version = "3.10"
+python_version = "3.12"
 files = ["legroom"]
 ignore_missing_imports = true
 follow_imports = "skip"
@@ -65,4 +66,8 @@ warn_unused_ignores = true
 
 [tool.ruff]
 line-length = 100
-target-version = "py310"
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "BLE", "SIM", "RUF"]
+ignore = ["E501"]

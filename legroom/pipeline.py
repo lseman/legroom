@@ -406,9 +406,9 @@ class TransformPipeline:
     ) -> list[dict[str, Any]]:
         """Run one existing transform through the common phase seam."""
         if transform_name.lower() in self._disabled_phases:
-            transform = lambda value: PhaseProposal(
-                value, metadata={"disabled_by_calibration": True}
-            )
+
+            def transform(value):
+                return PhaseProposal(value, metadata={"disabled_by_calibration": True})
         phase = CallablePhase(
             name,
             transform,

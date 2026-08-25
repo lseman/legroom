@@ -482,7 +482,7 @@ def format_markdown(report: EvaluationReport) -> str:
     lines.extend(
         [
             "",
-            "## Quality–token tradeoff",
+            "## Quality-token tradeoff",
             "",
             "| Strategy | Mean saved | Mean quality | Mean invariants | Pareto |",
             "|---|---:|---:|---:|:---:|",

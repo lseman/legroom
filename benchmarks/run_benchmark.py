@@ -12,14 +12,14 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from legroom.evaluation import (
+from legroom.evaluation import (  # noqa: E402
     CompositeTaskEvaluator,
     DeclaredChecksEvaluator,
     EvaluationSuite,
     ExpectedTermsEvaluator,
     format_markdown,
 )
-from legroom.task_replay import SubprocessTaskRunner, TaskRunnerEvaluator
+from legroom.task_replay import SubprocessTaskRunner, TaskRunnerEvaluator  # noqa: E402
 
 
 def main() -> int:

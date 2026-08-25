@@ -90,6 +90,26 @@ adaptive-size bias.
 echo '[{"role":"user","content":"Hello"},{"role":"assistant","content":"Hi!"}]' | legroom
 ```
 
+### SDK worker
+
+Applications in other language runtimes can keep Legroom loaded as a persistent
+JSON-lines worker without routing provider traffic through the HTTP proxy:
+
+```bash
+legroom-sdk
+# Equivalent: python -m legroom.sdk_worker
+```
+
+Each stdin line is a request and each stdout line is its correlated response:
+
+```json
+{"id":"1","method":"compress","model":"gpt-4o","messages":[{"role":"user","content":"Hello"}],"config":{"protect_recent":2}}
+```
+
+The response contains `id`, `ok`, compressed `messages`, and token/transform
+`stats`. Errors use the same `id` with `ok: false`; the worker remains alive for
+subsequent requests.
+
 ### Proxy Server
 
 Legroom includes a FastAPI reverse proxy that compresses context on the fly and serves a live dashboard:

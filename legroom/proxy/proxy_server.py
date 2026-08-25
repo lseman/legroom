@@ -105,7 +105,7 @@ class LegroomProxy:
     ) -> None:
         # Resolve API key from parameter or environment variable
         self.api_key = _resolve_api_key(api_key)
-        
+
         # Use default target if not specified
         if target_url is None:
             target_url = os.environ.get(

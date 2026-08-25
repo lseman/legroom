@@ -16,11 +16,11 @@ from collections import OrderedDict
 from threading import RLock
 from typing import Any, Literal
 
+import tiktoken
+
 # Use MD5 instead of SHA256 for cache keys — fast enough for token
 # counting (collision risk is negligible for this use case) and ~2x faster.
 _hash_func = hashlib.md5
-
-import tiktoken
 
 _MODEL_TO_ENCODING: dict[str, str] = {
     "gpt-4o": "o200k_base",

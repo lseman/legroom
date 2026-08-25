@@ -79,10 +79,7 @@ def _compute_salience(content: str) -> float:
     # Normalize TF scores to [0, 1]
     if tf_scores:
         max_tf = max(tf_scores)
-        if max_tf > 0:
-            tf_normalized = [s / max_tf for s in tf_scores]
-        else:
-            tf_normalized = [0.0] * len(tf_scores)
+        tf_normalized = [s / max_tf for s in tf_scores] if max_tf > 0 else [0.0] * len(tf_scores)
     else:
         return 0.0
 

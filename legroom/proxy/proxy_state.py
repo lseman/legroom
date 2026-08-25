@@ -250,5 +250,5 @@ class ProxyState:
         """Get live events from the queue (for WebSocket)."""
         try:
             return await asyncio.wait_for(queue.get(), timeout=timeout)
-        except asyncio.TimeoutError:
+        except TimeoutError:
             return None

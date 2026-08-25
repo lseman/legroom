@@ -69,7 +69,7 @@ class CodeCompressor:
         lines = content.split("\n")
         lines = self._strip_comments(lines)
         lines = self._collapse_duplicate_lines(lines)
-        normalized = "\n".join([_WS_NORMALIZE.sub(" ", l).strip() for l in lines])
+        normalized = "\n".join([_WS_NORMALIZE.sub(" ", line).strip() for line in lines])
         if len(normalized) < len(content):
             return CompressOutput(
                 compressed=normalized,

@@ -111,7 +111,7 @@ def _split_sentences(text: str) -> list[str]:
 
     # Merge very short fragments (< 3 words) into the previous sentence
     merged: list[str] = []
-    for i, s in enumerate(sentences):
+    for s in sentences:
         if len(s.split()) < 3 and merged:
             merged[-1] += " " + s
         else:

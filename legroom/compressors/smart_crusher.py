@@ -323,7 +323,7 @@ class SmartCrusher:
         parts1 = fp1.split("|")
         parts2 = fp2.split("|")
         distance = 0
-        for p1, p2 in zip(parts1, parts2):
+        for p1, p2 in zip(parts1, parts2, strict=False):
             if p1 != p2:
                 # Count character differences within the segment
                 distance += self._segment_distance(p1, p2)
