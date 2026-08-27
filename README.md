@@ -1,7 +1,11 @@
 # Legroom
 
 <p align="center">
-  <img src="assets/logo.svg" alt="Legroom" width="280">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/lseman/legroom/main/assets/logo-dark.svg">
+    <source media="(prefers-color-scheme: light)" srcset="https://raw.githubusercontent.com/lseman/legroom/main/assets/logo-light.svg">
+    <img src="https://raw.githubusercontent.com/lseman/legroom/main/assets/logo-light.svg" alt="Legroom" width="320">
+  </picture>
 </p>
 
 <p align="center">

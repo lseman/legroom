@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 360 80" fill="none" role="img" aria-label="legroom — context compression for LLM agents">
+  <defs>
+    <linearGradient id="ll-accent" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#fb923c"/>
+      <stop offset="100%" stop-color="#ea580c"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Mark: three chevrons packed tight, releasing the payload that survives
+       into open space on the right. Compression in, legroom out. -->
+  <g transform="translate(12, 12)" stroke-linecap="round" stroke-linejoin="round" fill="none">
+    <path d="M28 4 L6 28 L28 52"  stroke="#0f172a" stroke-width="5"/>
+    <path d="M28 13 L14 28 L28 43" stroke="#0f172a" stroke-width="4.5" opacity="0.5"/>
+    <path d="M28 21 L22 28 L28 35" stroke="#0f172a" stroke-width="4" opacity="0.28"/>
+    <!-- payload released into the room -->
+    <path d="M32 28 H50" stroke="url(#ll-accent)" stroke-width="5"/>
+    <circle cx="56" cy="28" r="4.5" fill="url(#ll-accent)"/>
+  </g>
+
+  <text x="96" y="46" font-family="ui-sans-serif,system-ui,-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif" font-size="34" font-weight="700" fill="#0f172a" letter-spacing="-0.8">legroom</text>
+  <text x="98" y="64" font-family="ui-sans-serif,system-ui,-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif" font-size="11.5" font-weight="500" fill="#64748b" letter-spacing="0.4">context compression for LLM agents</text>
+</svg>
