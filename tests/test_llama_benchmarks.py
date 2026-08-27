@@ -2,10 +2,8 @@
 
 from __future__ import annotations
 
-import json
 import sys
 from pathlib import Path
-from typing import Any
 
 import pytest
 
@@ -19,13 +17,11 @@ from legroom.analysis.llama_benchmarks import (  # noqa: E402
     KvCacheAlignmentEvaluator,
     LlamaBenchmarkRunner,
     LlamaKvCacheHitRateEstimator,
-    LlamaResult,
     PrefixStabilityEvaluator,
     SequentialNormalizationStabilityEvaluator,
     _check_tool_structure_preserved,
     _count_json_spans,
 )
-
 
 # ---------------------------------------------------------------------------
 # Fixtures for tests

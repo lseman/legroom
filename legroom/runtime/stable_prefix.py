@@ -29,7 +29,7 @@ import hashlib
 import logging
 from collections import OrderedDict
 from copy import deepcopy
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any
 
 from ..analysis.tokenizer import count_tokens_messages
@@ -81,7 +81,7 @@ def _prefix_key(messages: list[dict[str, Any]], model: str) -> str:
     if not prefix:
         prefix = messages[:1]  # Fallback: at least the first message
     document = json.dumps(
-        [model] + prefix,
+        [model, *prefix],
         ensure_ascii=False,
         separators=(",", ":"),
         sort_keys=True,

@@ -36,8 +36,6 @@ from __future__ import annotations
 import re
 import unicodedata
 from dataclasses import dataclass
-from typing import Any
-
 
 # Pre-compiled patterns
 # Non-breaking space, thin space, em space, en space → regular space
@@ -161,7 +159,7 @@ class WhitespaceCanonicalizer:
         normalized = unicodedata.normalize("NFC", text)
         if normalized != text:
             # Count changed characters
-            count = sum(1 for a, b in zip(text, normalized) if a != b)
+            count = sum(1 for a, b in zip(text, normalized, strict=False) if a != b)
         return normalized, count
 
     def _normalize_spaces(self, text: str) -> tuple[str, int]:

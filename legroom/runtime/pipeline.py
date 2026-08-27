@@ -9,6 +9,7 @@ Parallel execution:
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import logging
 import re
@@ -29,23 +30,25 @@ from ..compressors.compressor_registry import _compute_salience
 from ..compressors.content_detector import ContentDetector
 from ..compressors.content_router import ContentRouter
 from ..compressors.json_canonicalizer import JsonCanonicalizer
+from ..compressors.kv_cache_fingerprinter import KVCacheFingerprinter
 from ..compressors.kv_cache_optimizer import KVOptimizer
 from ..compressors.lossless_compaction import compact_lossless
-from ..compressors.sequential_normalizer import SequentialNumberNormalizer
-from ..compressors.whitespace_canonicalizer import WhitespaceCanonicalizer
-from ..compressors.token_boundary_aligner import TokenBoundaryAligner
-from ..compressors.token_normalizer import TokenNormalizer
-from ..compressors.kv_cache_fingerprinter import KVCacheFingerprinter
 from ..compressors.models import apply_profile
 from ..compressors.recursive_json import route_embedded_json
 from ..compressors.semantic_dedup import SemanticDedup, SemanticDedupResult
+from ..compressors.sequential_normalizer import SequentialNumberNormalizer
+from ..compressors.token_boundary_aligner import TokenBoundaryAligner
+from ..compressors.token_normalizer import TokenNormalizer
+from ..compressors.whitespace_canonicalizer import WhitespaceCanonicalizer
 from ..output.shaper import OutputShaper
 from .config import CompressConfig
 from .ir import Conversation
 from .phases import CallablePhase, PhaseContext, PhaseProposal, PhaseRunner
-from .risk_policy import RiskAssessment, RiskPolicy
-from .stable_prefix import StablePrefixCache, _prefix_key as _spc_prefix_key, _is_stable_message as _spc_is_stable
 from .prefix_kv_cache import PrefixKVCache, PrefixKVResult
+from .risk_policy import RiskAssessment, RiskPolicy
+from .stable_prefix import StablePrefixCache
+from .stable_prefix import _is_stable_message as _spc_is_stable
+from .stable_prefix import _prefix_key as _spc_prefix_key
 
 logger = logging.getLogger(__name__)
 
@@ -168,7 +171,7 @@ def _preserve_phase_safe(
     # Only restore protected indices if the candidate changed them
     # compared to what was passed INTO this phase, AND the compression
     # did not save tokens (i.e. it made things worse or stayed the same).
-    for i, (pre, cand) in enumerate(zip(before, restored)):
+    for i, (pre, cand) in enumerate(zip(before, restored, strict=False)):
         pre_content = pre.get("content", "")
         cand_content = cand.get("content", "")
         if pre_content == cand_content:
@@ -550,7 +553,7 @@ class TransformPipeline:
         self, messages: list[dict[str, Any]], model: str
     ) -> str:
         """Compute a stable key for the prefix portion of messages."""
-        return StablePrefixCache.__module__.replace(".stable_prefix", "")  # noqa: SLF001
+        return StablePrefixCache.__module__.replace(".stable_prefix", "")
 
     def _compress_standalone(
         self, messages: list[dict[str, Any]], model: str
@@ -563,10 +566,7 @@ class TransformPipeline:
         compressed output for the given messages.
         """
         # Run cache alignment if enabled
-        if self.cache_align_enabled:
-            aligned = self.cache_aligner.apply(messages)
-        else:
-            aligned = messages
+        aligned = self.cache_aligner.apply(messages) if self.cache_align_enabled else messages
 
         # Run compression
         if self.compress_enabled:
@@ -808,13 +808,13 @@ class TransformPipeline:
             protected_indices: set[int] = set()
             for span in protected_spans:
                 if span.startswith("message:"):
-                    try:
+                    with contextlib.suppress(ValueError, IndexError):
                         protected_indices.add(int(span.split(":", 1)[1]))
-                    except (ValueError, IndexError):
-                        pass
+
+            _json_canon = self._json_canonicalizer
 
             def canonicalize(value: list[dict[str, Any]]) -> PhaseProposal:
-                result = self._json_canonicalizer.canonicalize(
+                result = _json_canon.canonicalize(
                     value, backend=self.backend, protected_indices=protected_indices
                 )
                 # Use read-only restoration: preserve fresh Read results but
@@ -846,13 +846,15 @@ class TransformPipeline:
         # free win — invisible whitespace differences cause 100% KV cache misses
         # despite being semantically identical.
         if self._ws_canonicalizer is not None:
+            _ws_canon = self._ws_canonicalizer
+
             def canonicalize_ws(value: list[dict[str, Any]]) -> PhaseProposal:
                 canonical_count = 0
                 output = list(value)
                 for i, msg in enumerate(value):
                     content = msg.get("content", "")
                     if isinstance(content, str) and content.strip():
-                        result = self._ws_canonicalizer.normalize(
+                        result = _ws_canon.normalize(
                             content, backend=self.backend
                         )
                         if result.changes > 0:
@@ -885,13 +887,15 @@ class TransformPipeline:
         # This complements character-level normalization by verifying that
         # normalized text produces identical token sequences across turns.
         if self._token_normalizer is not None:
+            _token_norm = self._token_normalizer
+
             def normalize_tokens(value: list[dict[str, Any]]) -> PhaseProposal:
                 token_count = 0
                 output = list(value)
                 for i, msg in enumerate(value):
                     content = msg.get("content", "")
                     if isinstance(content, str) and content.strip():
-                        result = self._token_normalizer.optimize(
+                        result = _token_norm.optimize(
                             content, backend=self.backend
                         )
                         if result.text != content:
@@ -923,13 +927,15 @@ class TransformPipeline:
         # Ensures normalization happens at token boundaries, not character boundaries.
         # This prevents token boundary shifts that cause KV cache misses.
         if self._token_boundary_aligner is not None:
+            _token_align = self._token_boundary_aligner
+
             def align_tokens(value: list[dict[str, Any]]) -> PhaseProposal:
                 boundary_count = 0
                 output = list(value)
                 for i, msg in enumerate(value):
                     content = msg.get("content", "")
                     if isinstance(content, str) and content.strip():
-                        result = self._token_boundary_aligner.align(
+                        result = _token_align.align(
                             content, backend=self.backend
                         )
                         if result.text != content:
@@ -962,13 +968,15 @@ class TransformPipeline:
         # ([0]→[IDX]), step numbers (step 1→step IDX) with fixed placeholders so
         # grep/search results from different turns tokenize identically.
         if self._seq_normalizer is not None:
+            _seq_norm = self._seq_normalizer
+
             def normalize_seq(value: list[dict[str, Any]]) -> PhaseProposal:
                 normalized_count = 0
                 output = list(value)
                 for i, msg in enumerate(value):
                     content = msg.get("content", "")
                     if isinstance(content, str) and content.strip():
-                        result = self._seq_normalizer.normalize(
+                        result = _seq_norm.normalize(
                             content, backend=self.backend
                         )
                         if result.normalized_count > 0:
@@ -1165,22 +1173,22 @@ class TransformPipeline:
         # of salience tracking, which is purely for the metadata below.
         if tokens_after > tokens_before:
             logger.warning("Compression inflated tokens; reverting to original")
+            inflation_metadata: dict[str, Any] = {
+                "cache_metrics": self.cache_aligner.get_metrics(),
+                "salience_scores_before": salience_scores_before,
+                "phase_reports": self._phase_reports,
+                "risk_assessment": list(risk_assessment.labels),
+            }
+            if self._stable_prefix_cache is not None:
+                inflation_metadata["prefix_cache"] = self._stable_prefix_cache.to_dict()
             return TransformResult(
                 messages=messages,
                 tokens_before=tokens_before,
                 tokens_after=tokens_before,
                 transforms_applied=["inflation_guard"],
                 warnings=self._warnings,
-                metadata={
-                    "cache_metrics": self.cache_aligner.get_metrics(),
-                    "salience_scores_before": salience_scores_before,
-                    "phase_reports": self._phase_reports,
-                    "risk_assessment": list(risk_assessment.labels),
-                },
+                metadata=inflation_metadata,
             )
-            if self._stable_prefix_cache is not None:
-                result.metadata["prefix_cache"] = self._stable_prefix_cache.to_dict()
-            return result
 
         # Phase N: Cache the compressed prefix for future requests.
         # After the first full compression pass, store the stable prefix

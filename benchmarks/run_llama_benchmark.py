@@ -32,8 +32,6 @@ import json
 import sys
 import time
 import tracemalloc
-from collections import defaultdict
-from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
@@ -145,7 +143,7 @@ def _format_markdown(results: dict[str, Any]) -> str:
         "|---|---|---:|---:|---:|---:|",
     ]
 
-    for strategy_name, strategy_results in results.get("strategy_results", {}).items():
+    for _strategy_name, strategy_results in results.get("strategy_results", {}).items():
         for result in strategy_results:
             lines.append(
                 f"| {result['strategy']} | {result['fixture']} | "
@@ -259,7 +257,7 @@ def main() -> int:
         }
 
     # Run benchmarks
-    runner = LlamaBenchmarkRunner()
+    LlamaBenchmarkRunner()
     strategy_results: dict[str, list[dict[str, Any]]] = {}
 
     for strategy_name, config in strategies.items():

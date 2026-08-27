@@ -30,10 +30,10 @@ from __future__ import annotations
 import json
 import re
 from collections import Counter
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any, Protocol
 
-from .evaluation import Fixture, TaskEvaluation, QualityEvidence
+from .evaluation import Fixture, QualityEvidence
 
 
 class LlamaEvaluator(Protocol):
@@ -110,7 +110,6 @@ class JsonCanonicalizationCorrectnessEvaluator:
         checks.append(valid_json_args)
 
         # Check 2: All tool output content contains valid embedded JSON
-        valid_json_content = True
         total_content_json = 0
         for msg in output:
             content = msg.get("content", "")
@@ -270,7 +269,7 @@ class PrefixStabilityEvaluator:
 
         # Check 2: Stable message content (or tool definition) is preserved
         content_preserved = True
-        for orig, out in zip(original_stable, output_stable):
+        for orig, out in zip(original_stable, output_stable, strict=False):
             # Content messages use 'content' field
             # Tool definitions use 'function' field
             orig_content = orig.get("content", orig.get("function"))
@@ -282,14 +281,13 @@ class PrefixStabilityEvaluator:
 
         # Check 3: Tool definitions preserve their 'id' field
         tool_ids_preserved = True
-        for orig, out in zip(original_stable, output_stable):
+        for orig, out in zip(original_stable, output_stable, strict=False):
             # Tool definitions have 'id'; content messages don't
             orig_id = orig.get("id")
             out_id = out.get("id")
-            if orig_id is not None and out_id is not None:
-                if orig_id != out_id:
-                    tool_ids_preserved = False
-                    break
+            if orig_id is not None and out_id is not None and orig_id != out_id:
+                tool_ids_preserved = False
+                break
         checks.append(tool_ids_preserved)
 
         # Check 4: Conversation tail messages are present

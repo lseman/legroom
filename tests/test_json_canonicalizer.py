@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 import json
-import sys
 import pathlib
+import sys
 
 import pytest
 
@@ -213,7 +213,7 @@ class TestCanonicalizeText:
     def test_large_json_skipped(self, canonicalizer):
         """JSON spans larger than max should be skipped."""
         large_json = '{"data": ' + json.dumps({"key": "x" * 40000}) + "}"
-        result, count = canonicalizer._canonicalize_text(large_json)
+        _result, count = canonicalizer._canonicalize_text(large_json)
         assert count == 0  # Skipped due to 32KB size limit
 
     def test_empty_text(self, canonicalizer):
@@ -430,7 +430,7 @@ class TestToolCallCanonicalization:
                 }]
             }
         ]
-        result = canonicalizer.canonicalize(messages, backend="llama_cpp")
+        canonicalizer.canonicalize(messages, backend="llama_cpp")
         assert messages[0]["tool_calls"][0]["function"]["arguments"] == original_args
 
     def test_tool_call_kv_cache_alignment(self, canonicalizer):

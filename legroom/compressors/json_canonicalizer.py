@@ -36,7 +36,6 @@ from typing import Any
 
 from .balanced_end import find_balanced_end
 
-
 # Minimum JSON size before canonicalization is worth the CPU cost.
 # Small JSON fragments (< 30 chars) are unlikely to dominate token counts.
 _MIN_CANONICALIZE_BYTES = 30

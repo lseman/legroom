@@ -11,8 +11,7 @@ from "Prefix-Only KV Cache with Delta Encoding" (P4). It verifies:
 
 from __future__ import annotations
 
-import json
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -20,7 +19,6 @@ from legroom.compressors.kv_cache_fingerprinter import KVCacheFingerprinter
 from legroom.runtime.prefix_kv_cache import (
     PrefixDelta,
     PrefixKVCache,
-    PrefixKVResult,
 )
 from legroom.runtime.stable_prefix import StablePrefixCache
 
@@ -245,7 +243,7 @@ class TestPrefixKVCache:
 
         # Second call (cache hit)
         compress_fn.reset_mock()
-        prefix2, tokens2 = cache.get_or_compute_prefix(
+        prefix2, _tokens2 = cache.get_or_compute_prefix(
             messages, "gpt-4o", compress_fn
         )
         assert prefix2 == prefix1

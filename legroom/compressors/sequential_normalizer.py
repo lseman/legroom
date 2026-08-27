@@ -37,8 +37,6 @@ via the CCR store when needed for code edits or patches.
 from __future__ import annotations
 
 import re
-from typing import Any
-
 
 # Pre-compiled regex patterns
 # Line numbers: word:42 (grep results, file references)
@@ -145,7 +143,7 @@ class SequentialNumberNormalizer:
         ]
 
         total_normalized = 0
-        for pattern_fn, name in patterns:
+        for pattern_fn, _name in patterns:
             normalized, count = pattern_fn(normalized)
             total_normalized += count
 

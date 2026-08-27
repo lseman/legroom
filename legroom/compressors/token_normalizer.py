@@ -28,9 +28,7 @@ The token-level approach complements character-level normalization:
 
 from __future__ import annotations
 
-import re
 from dataclasses import dataclass
-from typing import Any
 
 import tiktoken
 

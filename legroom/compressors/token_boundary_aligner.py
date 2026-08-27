@@ -9,10 +9,10 @@ tokenize differently if normalization shifts token boundaries. For example:
 
     Before: "file.py:42: code()"
     After:  "file.py:LN: code()"
-    
+
     Character-level: ✓ Same semantic content
     Token-level:     ✗ Different token sequences due to boundary shifts
-    
+
     Correct approach:
     1. Encode to tokens: [file][.][py][:]42[:] [code]()
     2. Normalize within tokens: [file][.][py][:]LN[:] [code]()
@@ -43,9 +43,7 @@ Research reference: "KVCache: Efficient and Context-Aware KV Cache Compression" 
 
 from __future__ import annotations
 
-import re
-from dataclasses import dataclass
-from typing import Any
+from dataclasses import dataclass, field
 
 import tiktoken
 
@@ -65,10 +63,10 @@ class TokenBoundaryAlignResult:
     text: str
     """Aligned text with token boundary corrections."""
 
-    original_tokens: list[int] = None
+    original_tokens: list[int] = field(default_factory=list)
     """Token sequence before alignment."""
 
-    aligned_tokens: list[int] = None
+    aligned_tokens: list[int] = field(default_factory=list)
     """Token sequence after alignment."""
 
     boundary_shifts: int = 0
@@ -76,14 +74,6 @@ class TokenBoundaryAlignResult:
 
     verified: bool = True
     """Whether alignment was verified to produce correct tokens."""
-
-    def __post_init__(self) -> None:
-        # Set default values for mutable fields
-        if self.original_tokens is None:
-            object.__setattr__(self, "original_tokens", [])
-        if self.aligned_tokens is None:
-            object.__setattr__(self, "aligned_tokens", [])
-
 
 class TokenBoundaryAligner:
     """Aligns text normalization to token boundaries for KV cache optimization.
@@ -238,20 +228,19 @@ class TokenBoundaryAligner:
 
         while i < len(tokens):
             token_text = encoding.decode([tokens[i]])
-            
+
             # Check for combining characters (Unicode normalization)
-            if self._is_combining_char(token_text):
+            if self._is_combining_char(token_text) and result:
                 # Merge with previous character
-                if result:
-                    prev_token = result[-1]
-                    prev_text = encoding.decode([prev_token])
-                    # Merge combining char with previous character
-                    merged = prev_text + token_text
-                    merged_tokens = encoding.encode(merged)
-                    if len(merged_tokens) == 1:
-                        result[-1] = merged_tokens[0]
-                        i += 1
-                        continue
+                prev_token = result[-1]
+                prev_text = encoding.decode([prev_token])
+                # Merge combining char with previous character
+                merged = prev_text + token_text
+                merged_tokens = encoding.encode(merged)
+                if len(merged_tokens) == 1:
+                    result[-1] = merged_tokens[0]
+                    i += 1
+                    continue
 
             result.append(tokens[i])
             i += 1
@@ -288,11 +277,11 @@ class TokenBoundaryAligner:
         """Check if text is a combining Unicode character."""
         if len(text) != 1:
             return False
-        
+
         import unicodedata
         try:
             category = unicodedata.category(text)
             # Combining marks: Mn (Nonspacing Mark), Mc (Spacing Mark), Me (Enclosing Mark)
             return category.startswith("M")
-        except Exception:
+        except (TypeError, ValueError):
             return False

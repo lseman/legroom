@@ -44,8 +44,6 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
-import tiktoken
-
 from ..analysis.tokenizer import count_tokens_messages
 from ..compressors.kv_cache_fingerprinter import KVCacheFingerprinter
 from ..runtime.stable_prefix import (
@@ -102,7 +100,7 @@ class PrefixDelta:
         """Total token count of the changed messages."""
         all_changed = (
             self.insertions
-            + [d for d, _ in self.deletions]
+            + self.deletions
             + [new for _, new in self.replacements]
         )
         return count_tokens_messages(all_changed, "gpt-4o")
@@ -360,10 +358,7 @@ class PrefixKVCache:
         # Compare tool calls (if present)
         prev_tool_calls = prev_msg.get("tool_calls")
         curr_tool_calls = curr_msg.get("tool_calls")
-        if prev_tool_calls != curr_tool_calls:
-            return True
-
-        return False
+        return prev_tool_calls != curr_tool_calls
 
     def _compute_prefix_fingerprint(
         self, prefix_messages: list[dict[str, Any]], model: str
@@ -380,7 +375,7 @@ class PrefixKVCache:
         Returns:
             Deterministic fingerprint of the prefix tokens.
         """
-        encoding = self._fingerprinter.get_encoding(model)
+        self._fingerprinter.get_encoding(model)
         prefix_text = " ".join(
             msg.get("content", "") for msg in prefix_messages
         )

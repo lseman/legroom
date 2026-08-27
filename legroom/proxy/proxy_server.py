@@ -31,9 +31,9 @@ from ..integration.provider_cache import (
     StreamingUsageParser,
     parse_cache_usage,
 )
-from ..runtime.stable_prefix import StablePrefixCache
 from ..runtime.compress import compress
 from ..runtime.config import CompressConfig
+from ..runtime.stable_prefix import StablePrefixCache
 from .body_forwarding import select_outbound_body
 from .compression_cache import CachedCompression, CompressionResultCache
 from .headers import filter_request_headers, filter_response_headers
@@ -287,7 +287,7 @@ class LegroomProxy:
                 # with the same schema, the KV cache misses. Canonicalize
                 # the tools field so identical schemas produce identical
                 # tokenized prefixes.
-                if self.backend == "llama_cpp":
+                if self.backend == "llama_cpp" and body is not None:
                     from ..compressors.tool_schema_canonicalizer import (
                         ToolSchemaCanonicalizer,
                     )
@@ -306,19 +306,16 @@ class LegroomProxy:
                 # compression cache by tail alone (partitioned by prefix) so that
                 # repeated conversation patterns across different turns get cache
                 # hits — dramatically improving hit rates for llama.cpp.
-                use_prefix_cache = (
-                    self.backend == "llama_cpp"
-                    and self._stable_prefix_cache is not None
-                )
-                if use_prefix_cache:
+                if self.backend == "llama_cpp" and self._stable_prefix_cache is not None:
                     # Try StablePrefixCache first — on hit, use tail-based key.
                     # Use the *current* request's tail (view.messages), not the
                     # stored entry's tail, so repeated conversation patterns
                     # get cache hits regardless of which prefix entry was cached.
-                    sp_key = self._stable_prefix_cache.key_for_messages(
+                    _spc = self._stable_prefix_cache
+                    sp_key = _spc.key_for_messages(
                         messages=view.messages, model=view.model
                     )
-                    sp_entry = self._stable_prefix_cache.get(sp_key)
+                    sp_entry = _spc.get(sp_key)
                     if sp_entry is not None:
                         # Prefix cache hit — key by tail only
                         tail = [msg for msg in view.messages

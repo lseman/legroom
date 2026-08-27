@@ -10,7 +10,6 @@ from legroom.proxy.compression_cache import (
 )
 from legroom.runtime.stable_prefix import StablePrefixCache, _prefix_key
 
-
 # ---------------------------------------------------------------------------
 # CompressionResultCache — key() baseline
 # ---------------------------------------------------------------------------
@@ -73,7 +72,7 @@ def test_tail_key_same_tail_different_prefixes():
     (including system prompts / tool definitions) are completely different.
     """
     tail = [{"role": "user", "content": "list files"}, {"role": "assistant", "content": "done"}]
-    key = CompressionResultCache.tail_key(model="gpt-4o", tail_messages=tail)
+    CompressionResultCache.tail_key(model="gpt-4o", tail_messages=tail)
 
     # Two entirely different full message lists but same tail
     prefix_a = [
@@ -173,7 +172,7 @@ def test_get_or_compute_cache_miss():
     assert compute_count[0] == 1  # compute() called once
 
     # Same inputs → cache hit, compute not called
-    result2 = cache.get_or_compute(
+    cache.get_or_compute(
         model="gpt-4o",
         tail_messages=tail,
         compute=counting_compute,

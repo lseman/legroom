@@ -7,8 +7,8 @@ import hashlib
 import json
 import time
 from collections import OrderedDict
-from dataclasses import dataclass
 from collections.abc import Callable
+from dataclasses import dataclass
 from typing import Any
 
 
@@ -93,7 +93,7 @@ class CompressionResultCache:
         prefix_hash = (
             "sp:" + _hashlib.sha256(
                 json.dumps(
-                    [model] + prefix,
+                    [model, *prefix],
                     ensure_ascii=False,
                     separators=(",", ":"),
                     sort_keys=True,
