@@ -9,7 +9,7 @@ behind a marker without being presented with broken text.
 
 from __future__ import annotations
 
-from ..tokenizer import count_tokens
+from ..analysis.tokenizer import count_tokens
 from .compressor_registry import CompressOutput
 
 try:

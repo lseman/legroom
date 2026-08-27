@@ -8,7 +8,7 @@ import logging
 from collections import OrderedDict
 from typing import Any
 
-from ..tokenizer import count_tokens
+from ..analysis.tokenizer import count_tokens
 from .code_compressor import CodeCompressor
 from .compressor_registry import CompressOutput
 from .content_detector import ContentDetector

@@ -19,12 +19,11 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 
 from .._version import __version__
-from ..calibration import CalibrationConfig, CalibrationController
 from ..ccr.compression_store import CompressionStore
 from ..ccr.tool_injection import create_ccr_tool_definition
-from ..compress import compress
-from ..config import CompressConfig
-from ..provider_cache import (
+from ..integration.calibration import CalibrationConfig, CalibrationController
+from ..integration.provider_cache import (
+    Backend,
     CacheMode,
     CachePricing,
     ProviderCachePolicy,
@@ -32,6 +31,9 @@ from ..provider_cache import (
     StreamingUsageParser,
     parse_cache_usage,
 )
+from ..runtime.stable_prefix import StablePrefixCache
+from ..runtime.compress import compress
+from ..runtime.config import CompressConfig
 from .body_forwarding import select_outbound_body
 from .compression_cache import CachedCompression, CompressionResultCache
 from .headers import filter_request_headers, filter_response_headers
@@ -95,6 +97,7 @@ class LegroomProxy:
         provider_cache_mode: CacheMode = "off",
         provider_cache_key: str | None = None,
         provider_cache_ttl: str | None = None,
+        backend: Backend = "openai",
         cache_pricing: CachePricing | None = None,
         shadow_mode: bool = False,
         calibration_config: CalibrationConfig | None = None,
@@ -122,10 +125,12 @@ class LegroomProxy:
         # Compatibility alias for dashboard callers from pre-P2 releases.
         self._request_dedup = self._compression_cache
         self._metrics = ProxyMetrics()
+        self.backend = backend
         self._provider_cache = ProviderCachePolicy(
             mode=provider_cache_mode,
             key=provider_cache_key,
             ttl=provider_cache_ttl,
+            backend=backend,
         )
         self._cache_pricing = cache_pricing or CachePricing()
         self.shadow_mode = shadow_mode
@@ -133,6 +138,12 @@ class LegroomProxy:
         self._quality_evaluator = quality_evaluator
         self._cors_origins = cors_origins
         self._compression_store = CompressionStore()
+        # Shared stable-prefix cache for llama.cpp backend — keeps one
+        # LRU cache across all requests so the compressed system prompt
+        # stays identical turn-over-turn.
+        self._stable_prefix_cache: StablePrefixCache | None = (
+            StablePrefixCache() if backend == "llama_cpp" else None
+        )
         if max_compression_concurrency < 1:
             raise ValueError("max_compression_concurrency must be at least 1")
         self._compression_slots = asyncio.Semaphore(max_compression_concurrency)
@@ -269,13 +280,73 @@ class LegroomProxy:
 
             if self.compress_context and view is not None and view.messages:
                 policy = f"v2:ccr={path == '/v1/chat/completions'}"
-                cache_key = self._compression_cache.key(
-                    protocol=view.protocol,
-                    model=view.model,
-                    mode=self.mode,
-                    messages=view.messages,
-                    policy=policy,
+
+                # ---- Tool schema canonicalization (llama.cpp KV cache) ----
+                # Tool definitions are 10-50KB sent in full every request.
+                # If key ordering or formatting differs between requests
+                # with the same schema, the KV cache misses. Canonicalize
+                # the tools field so identical schemas produce identical
+                # tokenized prefixes.
+                if self.backend == "llama_cpp":
+                    from ..compressors.tool_schema_canonicalizer import (
+                        ToolSchemaCanonicalizer,
+                    )
+                    schema_canon = ToolSchemaCanonicalizer()
+                    canon_result = schema_canon.canonicalize_body(body)
+                    if canon_result.canonicalized_count > 0:
+                        body = canon_result.body
+                        body_mutated = True
+
+                # ---- Choose cache key strategy ----
+                # When StablePrefixCache is active (llama.cpp), the stable prefix
+                # (system prompt, tool definitions) repeats across turns while only
+                # the conversation tail changes. On a StablePrefixCache hit, the tail
+                # is compressed independently against the fixed prefix, so the
+                # compression result is a pure function of the tail. We key the
+                # compression cache by tail alone (partitioned by prefix) so that
+                # repeated conversation patterns across different turns get cache
+                # hits — dramatically improving hit rates for llama.cpp.
+                use_prefix_cache = (
+                    self.backend == "llama_cpp"
+                    and self._stable_prefix_cache is not None
                 )
+                if use_prefix_cache:
+                    # Try StablePrefixCache first — on hit, use tail-based key.
+                    # Use the *current* request's tail (view.messages), not the
+                    # stored entry's tail, so repeated conversation patterns
+                    # get cache hits regardless of which prefix entry was cached.
+                    sp_key = self._stable_prefix_cache.key_for_messages(
+                        messages=view.messages, model=view.model
+                    )
+                    sp_entry = self._stable_prefix_cache.get(sp_key)
+                    if sp_entry is not None:
+                        # Prefix cache hit — key by tail only
+                        tail = [msg for msg in view.messages
+                                if msg.get("role") not in ("system", "tool", "function")]
+                        if not tail:
+                            tail = view.messages[1:] if len(view.messages) > 1 else view.messages
+                        cache_key = self._compression_cache.tail_key(
+                            model=view.model,
+                            tail_messages=tail,
+                        )
+                    else:
+                        # Prefix cache miss — fall back to full-message key
+                        cache_key = self._compression_cache.key(
+                            protocol=view.protocol,
+                            model=view.model,
+                            mode=self.mode,
+                            messages=view.messages,
+                            policy=policy,
+                        )
+                else:
+                    cache_key = self._compression_cache.key(
+                        protocol=view.protocol,
+                        model=view.model,
+                        mode=self.mode,
+                        messages=view.messages,
+                        policy=policy,
+                    )
+
                 cached = self._compression_cache.get(cache_key)
                 if (
                     cached is not None
@@ -291,6 +362,14 @@ class LegroomProxy:
                         ccr_enabled=path == "/v1/chat/completions",
                         read_lifecycle_enabled=True,
                         disabled_phases=self._calibration.disabled_phases,
+                        backend=self.backend,
+                        # Normalize volatile values (UUIDs/timestamps/hex IDs)
+                        # so the prompt prefix stays byte-identical turn over turn.
+                        cache_align_enabled=self.backend == "llama_cpp",
+                        # Decompose into stable prefix + conversation tail so
+                        # the compressed prefix is cached and reused identically
+                        # across requests — the key to llama.cpp KV cache hits.
+                        stable_prefix_cache_enabled=self.backend == "llama_cpp",
                     )
                     async with self._compression_slots:
                         result = await asyncio.to_thread(
@@ -299,6 +378,7 @@ class LegroomProxy:
                             model=view.model,
                             config=config,
                             compression_store=self._compression_store,
+                            shared_prefix_cache=self._stable_prefix_cache,
                         )
                     quality: float | None = None
                     if self._quality_evaluator is not None:
@@ -615,6 +695,15 @@ class LegroomProxy:
             f'legroom_compression_cache_requests_total{{result="hit"}} {cache.hits}\n'
             f'legroom_compression_cache_requests_total{{result="miss"}} {cache.misses}\n'
         )
+        # Prefix cache metrics (llama.cpp KV-cache alignment)
+        if self._stable_prefix_cache is not None:
+            pfx = self._stable_prefix_cache.metrics
+            compression += (
+                "# HELP legroom_stable_prefix_cache_requests_total Stable prefix cache lookups.\n"
+                "# TYPE legroom_stable_prefix_cache_requests_total counter\n"
+                f'legroom_stable_prefix_cache_requests_total{{result="hit"}} {pfx.hits}\n'
+                f'legroom_stable_prefix_cache_requests_total{{result="miss"}} {pfx.misses}\n'
+            )
         return Response(
             content=operational + compression,
             media_type="text/plain; version=0.0.4; charset=utf-8",
@@ -639,16 +728,19 @@ class LegroomProxy:
         })
 
     async def _get_cache_stats(self) -> JSONResponse:
-        """Return compression-result cache statistics."""
+        """Return compression-result and prefix cache statistics."""
         dedup_cache = self._request_dedup
-        return JSONResponse(content={
+        result: dict[str, Any] = {
             "compression_results": {
                 "hits": dedup_cache.hits,
                 "misses": dedup_cache.misses,
                 "size": dedup_cache.size,
                 "hit_rate": round(dedup_cache.ratio * 100, 1),
             },
-        })
+        }
+        if self._stable_prefix_cache is not None:
+            result["stable_prefix"] = self._stable_prefix_cache.to_dict()
+        return JSONResponse(content=result)
 
     async def _sse_endpoint(self, request: Request) -> StreamingResponse:
         """Server-Sent Events endpoint for live updates (WebSocket fallback)."""

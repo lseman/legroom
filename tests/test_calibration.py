@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from legroom.calibration import CalibrationConfig, CalibrationController
+from legroom.integration.calibration import CalibrationConfig, CalibrationController
 
 
 def test_calibration_disables_reliably_failing_phase():

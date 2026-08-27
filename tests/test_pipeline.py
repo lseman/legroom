@@ -80,7 +80,7 @@ def test_high_level_compress_empty_input():
 
 def test_token_counting():
     """Token counting should work."""
-    from legroom.tokenizer import count_tokens, count_tokens_messages
+    from legroom.analysis.tokenizer import count_tokens, count_tokens_messages
 
     assert count_tokens("", model="gpt-4o") == 0
     assert count_tokens("hello", model="gpt-4o") > 0
@@ -222,7 +222,7 @@ def test_compress_thinking_stripping():
 
 def test_cache_aligner():
     """Cache aligner should replace volatile tokens."""
-    from legroom.pipeline import CacheAligner
+    from legroom.runtime.pipeline import CacheAligner
 
     aligner = CacheAligner()
     messages = [

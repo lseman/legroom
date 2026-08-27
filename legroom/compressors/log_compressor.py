@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections import Counter
 
-from ..tokenizer import count_tokens
+from ..analysis.tokenizer import count_tokens
 from .compressor_registry import CompressOutput
 
 

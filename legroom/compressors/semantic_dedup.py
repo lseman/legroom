@@ -22,7 +22,7 @@ from __future__ import annotations
 import hashlib
 import logging
 from collections import OrderedDict
-from typing import Any, ClassVar
+from typing import Any, ClassVar, Protocol, TypedDict
 
 logger = logging.getLogger(__name__)
 
@@ -61,12 +61,35 @@ def _load_onnx_session(model_path: str):
         return None
 
 
-def _load_tokenizer(vocab_path: str):
-    """Simple tokenizer compatible with Xenova/all-MiniLM-L6-v2 ONNX models."""
-    try:
-        from tokenizers import Tokenizer as HfTokenizer
+class _EncodedInput(TypedDict):
+    input_ids: list[int]
+    attention_mask: list[int]
 
-        return HfTokenizer.from_file(vocab_path)
+
+class _Tokenizer(Protocol):
+    def encode(self, text: str, add_special_tokens: bool = True) -> _EncodedInput: ...
+
+
+class _HuggingFaceTokenizer:
+    """Adapt tokenizers.Tokenizer to Legroom's small embedding interface."""
+
+    def __init__(self, vocab_path: str) -> None:
+        from tokenizers import Tokenizer
+
+        self._tokenizer = Tokenizer.from_file(vocab_path)
+
+    def encode(self, text: str, add_special_tokens: bool = True) -> _EncodedInput:
+        encoded = self._tokenizer.encode(text, add_special_tokens=add_special_tokens)
+        return {
+            "input_ids": list(encoded.ids),
+            "attention_mask": list(encoded.attention_mask),
+        }
+
+
+def _load_tokenizer(vocab_path: str) -> _Tokenizer | None:
+    """Load a tokenizer behind the uniform embedding-tokenizer interface."""
+    try:
+        return _HuggingFaceTokenizer(vocab_path)
     except Exception:  # noqa: BLE001
         # Fallback: naive word-piece tokenizer
         return None
@@ -77,7 +100,10 @@ class _SimpleTokenizer:
     unavailable. Handles basic word splitting and special token wrapping."""
 
     SPECIAL_TOKENS: ClassVar[dict[str, int]] = {
-        "[PAD]": 0, "[CLS]": 101, "[SEP]": 102, "[UNK]": 100
+        "[PAD]": 0,
+        "[CLS]": 101,
+        "[SEP]": 102,
+        "[UNK]": 100,
     }
 
     def __init__(self, vocab_path: str) -> None:
@@ -97,7 +123,7 @@ class _SimpleTokenizer:
             if tok not in self._vocab:
                 self._vocab[tok] = idx
 
-    def encode(self, text: str, add_special_tokens: bool = True) -> dict:
+    def encode(self, text: str, add_special_tokens: bool = True) -> _EncodedInput:
         """Encode text → {input_ids, attention_mask}."""
         words = text.lower().split()
         ids = []
@@ -115,10 +141,12 @@ class _SimpleTokenizer:
             mask.append(1)
         # Pad to fixed length (256 for MiniLM)
         max_len = 256
+        ids = ids[:max_len]
+        mask = mask[:max_len]
         pad_count = max(0, max_len - len(ids))
         ids.extend([0] * pad_count)
         mask.extend([0] * pad_count)
-        return {"input_ids": [ids], "attention_mask": [mask]}
+        return {"input_ids": ids, "attention_mask": mask}
 
 
 # ---------------------------------------------------------------------------
@@ -138,9 +166,7 @@ def _cosine_similarity(a: list[float], b: list[float]) -> float:
     return dot / (norm_a * norm_b)
 
 
-def _batch_cosine_similarity(
-    query: list[float], candidates: list[list[float]]
-) -> list[float]:
+def _batch_cosine_similarity(query: list[float], candidates: list[list[float]]) -> list[float]:
     """Compute cosine similarity between one query and many candidates.
 
     Uses numpy vectorization when available for significant speedup
@@ -193,8 +219,8 @@ def _embed_text(
         encoded = tokenizer.encode(text, add_special_tokens=True)
         import numpy as np
 
-        input_ids = np.array(encoded["input_ids"], dtype=np.int64)
-        attention_mask = np.array(encoded["attention_mask"], dtype=np.int64)
+        input_ids = np.array([encoded["input_ids"]], dtype=np.int64)
+        attention_mask = np.array([encoded["attention_mask"]], dtype=np.int64)
 
         outputs = session.run(
             None,
@@ -256,9 +282,7 @@ def _embed_batch(
 
     try:
         # Batch encode
-        encoded_batch = [
-            tokenizer.encode(t, add_special_tokens=True) for t in uncached_texts
-        ]
+        encoded_batch = [tokenizer.encode(t, add_special_tokens=True) for t in uncached_texts]
 
         # Pad to max length in batch
         max_len = max(len(e["input_ids"]) for e in encoded_batch)
@@ -296,9 +320,7 @@ def _embed_batch(
     except Exception:  # noqa: BLE001
         # Fallback: compute individually for uncached texts
         for idx_pos, orig_idx in enumerate(uncached_indices):
-            results[orig_idx] = _embed_text(
-                uncached_texts[idx_pos], session, tokenizer, cache
-            )
+            results[orig_idx] = _embed_text(uncached_texts[idx_pos], session, tokenizer, cache)
 
     return results
 
@@ -379,9 +401,9 @@ class SemanticDedup:
         session = _load_onnx_session(self._model_path)
         if session is not None:
             try:
-                from tokenizers import Tokenizer as HfTokenizer
-
-                tokenizer = HfTokenizer.from_file(self._vocab_path)
+                tokenizer = _load_tokenizer(self._vocab_path)
+                if tokenizer is None:
+                    raise RuntimeError("tokenizer could not be loaded")
                 self._session = session
                 self._tokenizer = tokenizer
                 return True
@@ -432,7 +454,7 @@ class SemanticDedup:
             return SemanticDedupResult(messages=messages, dedup_count=0, tokens_saved=0)
 
         # Count tokens before
-        from ..tokenizer import count_tokens_messages
+        from ..analysis.tokenizer import count_tokens_messages
 
         tokens_before = count_tokens_messages(messages, model)
 
@@ -466,9 +488,7 @@ class SemanticDedup:
 
         # Phase 2: Batch-embed all eligible texts in one ONNX call.
         eligible_texts = [item[1] for item in eligible]
-        embeddings = _embed_batch(
-            eligible_texts, self._session, self._tokenizer, _embedding_cache
-        )
+        embeddings = _embed_batch(eligible_texts, self._session, self._tokenizer, _embedding_cache)
 
         # Phase 3: Compare each message against known messages with
         # Jaccard pre-filter + vectorized cosine similarity.
@@ -496,7 +516,7 @@ class SemanticDedup:
                 # Cosine similarity of unit vectors is bounded by
                 # sqrt(Jaccard) in the worst case — use a conservative
                 # bound: if jaccard < threshold², skip.
-                if jaccard < self._threshold ** 2:
+                if jaccard < self._threshold**2:
                     continue
                 # Full cosine similarity (vectorized)
                 sim = _cosine_similarity(embedding, prev_embed)
@@ -515,8 +535,7 @@ class SemanticDedup:
                 result[msg_idx] = {**messages[msg_idx], "content": pointer}
                 dedup_count += 1
                 logger.debug(
-                    f"Semantic dedup: message {msg_idx} ≈ message {best_idx} "
-                    f"(sim={best_sim:.2f})"
+                    f"Semantic dedup: message {msg_idx} ≈ message {best_idx} (sim={best_sim:.2f})"
                 )
             else:
                 # Store this message for future comparison

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import pytest
 
@@ -11,11 +12,24 @@ from legroom.compressors.semantic_dedup import (
     SemanticDedup,
     SemanticDedupResult,
     _cosine_similarity,
+    _SimpleTokenizer,
 )
 
 # ---------------------------------------------------------------------------
 # Cosine similarity tests
 # ---------------------------------------------------------------------------
+
+
+def test_simple_tokenizer_returns_flat_bounded_model_inputs(tmp_path: Path):
+    vocab = tmp_path / "vocab.txt"
+    vocab.write_text("known\t42\n", encoding="utf-8")
+    tokenizer = _SimpleTokenizer(str(vocab))
+
+    encoded = tokenizer.encode(" ".join(["known"] * 300))
+
+    assert len(encoded["input_ids"]) == 256
+    assert len(encoded["attention_mask"]) == 256
+    assert all(isinstance(token_id, int) for token_id in encoded["input_ids"])
 
 
 def test_cosine_similarity_identical():

@@ -7,18 +7,18 @@ from concurrent.futures import ThreadPoolExecutor
 import pytest
 
 from legroom import CompressConfig, compress
-from legroom.ccr.compression_store import CompressionStore
-from legroom.ccr.marker_resolution import parse_markers
-from legroom.compressors.kv_cache_optimizer import KVOptimizer
-from legroom.pipeline import TransformPipeline
-from legroom.proxy.protocols import compression_view
-from legroom.proxy.proxy_state import ProxyState
-from legroom.read_lifecycle import (
+from legroom.analysis.read_lifecycle import (
     ReadClassification,
     ReadLifecycleConfig,
     ReadState,
     _replace_content,
 )
+from legroom.ccr.compression_store import CompressionStore
+from legroom.ccr.marker_resolution import parse_markers
+from legroom.compressors.kv_cache_optimizer import KVOptimizer
+from legroom.proxy.protocols import compression_view
+from legroom.proxy.proxy_state import ProxyState
+from legroom.runtime.pipeline import TransformPipeline
 
 
 def test_responses_view_only_selects_message_items():

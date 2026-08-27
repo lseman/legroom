@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 from legroom import CompressConfig, compress
-from legroom.ir import CompressionRisk, Conversation, Provenance
-from legroom.risk_policy import RiskPolicy
+from legroom.runtime.ir import CompressionRisk, Conversation, Provenance
+from legroom.runtime.risk_policy import RiskPolicy
 
 
 def test_ir_assigns_provenance_and_risk():

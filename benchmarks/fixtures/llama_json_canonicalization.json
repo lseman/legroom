@@ -1,0 +1,20 @@
+{
+  "description": "Tool calls with identical JSON payloads but different key ordering. Tests that canonicalization produces identical compressed output regardless of input key order.",
+  "messages": [
+    {"role": "system", "content": "You are a coding assistant with access to file operations and search tools."},
+    {"role": "user", "content": "What tools are available?"},
+    {"role": "assistant", "content": "I have access to several tools for code exploration and editing.", "tool_calls": [{"id": "call_tools", "type": "function", "function": {"name": "list_tools", "arguments": "{\"include_descriptions\": true, \"max_results\": 10, \"category\": \"all\"}"}}]},
+    {"role": "tool", "tool_call_id": "call_tools", "content": "Available tools:\n1. read_file(path: str, offset: int = 0, limit: int = 100) - Read file contents\n2. edit_file(path: str, edits: list) - Make precise file edits\n3. search_files(pattern: str, path: str = \"\", limit: int = 30) - Find files by path\n4. grep_files(pattern: str, path: str = \"\", caseSensitive: bool = false) - Search file contents\n5. run_command(command: str, timeout: int = 60) - Execute shell commands"},
+    {"role": "user", "content": "Read the README to see what features are documented."},
+    {"role": "assistant", "content": "Searching the README for features.", "tool_calls": [{"id": "call_read", "type": "function", "function": {"name": "read_file", "arguments": "{\"path\": \"README.md\", \"offset\": 0, \"limit\": 200}"}}]},
+    {"role": "tool", "tool_call_id": "call_read", "content": "# Legroom\n\n**Context compression for LLM agents.** Reduce token usage on every turn without losing the information the model actually needs.\n\n## Key Features\n\n- **SmartCrusher** — JSON array deduplication and summarization\n- **CacheAligner** — Normalization of volatile content (UUIDs, timestamps)\n- **JsonCanonicalizer** — Canonicalizes embedded JSON for KV cache alignment\n- **ToolSchemaCanonicalizer** — Canonicalizes tool definitions\n- **SequentialNumberNormalizer** — Replaces line numbers, array indices\n- **Cross-Turn Dedup** — Replaces identical spans with pointers\n- **ThinkingCompactor** — Strips reasoning blocks\n- **CCR** — Reversible compression with retrieval\n- **ML Compressor** — ONNX model for token-level retention scoring\n\n## Backends\n\n- `openai` (default) — stateless API, prefix rewriting is harmless\n- `llama_cpp` — real KV cache, canonicalization and alignment enabled by default"},
+    {"role": "user", "content": "So JSON canonicalization is automatic for llama.cpp?"},
+    {"role": "assistant", "content": "Yes. For the `llama_cpp` backend, these phases auto-enable: JSON canonicalization, tool schema canonicalization, sequential number normalization, and cache alignment. The KV cache optimization (prefix dedup with pointers) is explicitly disabled because it breaks byte-identical prefix matching."}
+  ],
+  "expected_terms": ["read_file", "edit_file", "search_files", "json_canonicalization", "llama_cpp", "cache_alignment"],
+  "checks": [
+    {"name": "tool call id preserved", "path": [3, "tool_call_id"], "expected": "call_tools"},
+    {"name": "tool call id preserved 2", "path": [6, "tool_call_id"], "expected": "call_read"},
+    {"name": "tool names preserved", "path": [2, "tool_calls", 0, "function", "name"], "expected": "list_tools"}
+  ]
+}

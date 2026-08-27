@@ -1,0 +1,21 @@
+{
+  "description": "Same conversation repeated with different tails. Tests that the stable prefix cache returns identical prefix messages on cache hits, ensuring KV cache alignment.",
+  "messages": [
+    {"role": "system", "content": "You are a helpful coding assistant with access to file operations and search tools."},
+    {"role": "user", "content": "What's the current date?"},
+    {"role": "assistant", "content": "I don't have access to the current date. Let me check if there's any system information available."},
+    {"role": "user", "content": "What Python version is available?"},
+    {"role": "assistant", "content": "I can check the Python version if you'd like. Would you like me to run a command to check?"},
+    {"role": "user", "content": "Yes, check Python version."},
+    {"role": "assistant", "content": "Running version check.", "tool_calls": [{"id": "call_version", "type": "function", "function": {"name": "run_command", "arguments": "{\"command\": \"python --version\"}"}}]},
+    {"role": "tool", "tool_call_id": "call_version", "content": "Python 3.11.6"},
+    {"role": "assistant", "content": "Python 3.11.6 is available."},
+    {"role": "user", "content": "Now let me ask a completely different question - what files are in the benchmarks directory?"}
+  ],
+  "expected_terms": ["Python", "benchmarks", "coding assistant", "search tools", "file operations"],
+  "checks": [
+    {"name": "system prompt preserved", "path": [0, "content"], "expected": "You are a helpful coding assistant with access to file operations and search tools."},
+    {"name": "tool call id preserved", "path": [6, "tool_call_id"], "expected": "call_version"},
+    {"name": "Python version preserved", "path": [8, "content"], "expected": "Python 3.11.6 is available."}
+  ]
+}

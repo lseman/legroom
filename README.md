@@ -40,6 +40,9 @@ on the current checkout rather than copied from a separate installation.
 
 - **SmartCrusher** — JSON array deduplication and summarization, with SimHash-based near-duplicate detection to auto-size how much to keep
 - **CacheAligner** — Opt-in normalization of UUIDs, timestamps, and JWTs that bust KV cache; disabled by default because volatile values may be task evidence
+- **JsonCanonicalizer** — Auto-enabled for `llama_cpp` backend; canonicalizes embedded JSON (key ordering, numeric formatting, whitespace) and tool call arguments so the tokenized output is identical turn-over-turn
+- **ToolSchemaCanonicalizer** — Auto-enabled for `llama_cpp` backend; canonicalizes the `tools` field in request bodies (sorted keys, compact formatting, float→int normalization). Tool definitions are often 10-50KB sent in full every request — two requests with the same schema but different key ordering tokenize differently and bust the KV cache
+- **SequentialNumberNormalizer** — Auto-enabled for `llama_cpp` backend; replaces line numbers (`file.py:42` → `file.py:LN`), array indices (`[0]` → `[IDX]`), step numbers (`step 1` → `step IDX`) with fixed placeholders so grep/search results from different turns tokenize identically
 - **ThinkingCompactor** — Strips `<think>...</think>` reasoning blocks
 - **ContentRouter** — Dispatches to the best compressor (JSON, logs, search, code)
 - **Cross-Turn Dedup** — Replaces identical spans across messages with in-context pointers
@@ -174,9 +177,10 @@ async with httpx.AsyncClient(base_url="http://127.0.0.1:8080/v1") as client:
 | `--api-key` | env var | API key (or env `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `LEGROOM_API_KEY`) |
 | `--no-compress` | false | Disable context compression |
 | `--mode` | `token` | `token` compresses full history; `cache` freezes prior items and compresses only the live item |
+| `--backend` | `openai` | Target inference backend: `openai` or `llama_cpp` (see below) |
 | `--provider-cache` | `off` | Provider prompt-cache policy: `off`, `implicit`, or `explicit` |
 | `--prompt-cache-key` | derived | Stable explicit-cache key; caller-supplied request fields take precedence |
-| `--prompt-cache-ttl` | provider default | OpenAI extended prompt-cache retention (`24h`) |
+| `--prompt-cache-ttl` | provider default | OpenAI extended prompt-cache retention (`24h`, `openai` backend only) |
 | `--shadow-mode` | false | Evaluate compression and potential savings without changing outbound context |
 | `--uncached-input-price` | `0` | USD per million uncached input tokens |
 | `--cache-write-price` | `0` | USD per million cache-write input tokens |
@@ -201,6 +205,43 @@ rates change independently of Legroom releases. Once the quality and savings
 metrics meet your release gate, remove `--shadow-mode` to mutate outbound
 requests. Legroom never replaces prompt-cache fields already supplied by the
 caller.
+
+#### llama.cpp backend
+
+`--backend openai` (the default) targets a stateless chat API: there is no
+client-visible KV cache, so token-count tricks like KV-cache prefix
+deduplication are harmless.
+
+`--backend llama_cpp` targets a `llama-server` instance, which keeps a real,
+per-slot KV cache and reuses it by matching the incoming prompt's token
+prefix **byte-for-byte** against what a slot already holds. Selecting this
+backend changes three things:
+
+- **Provider-cache controls** switch from OpenAI's `prompt_cache_key` /
+  `prompt_cache_retention` to llama.cpp's own `cache_prompt` (keep the slot's
+  KV cache instead of discarding it) and `id_slot` (pin a conversation to one
+  slot, derived deterministically from `--prompt-cache-key` so the same
+  conversation keeps landing on the same slot). As always, fields already set
+  by the caller are left untouched.
+- **KV-cache prefix deduplication is disabled**, regardless of any config
+  passed to the library directly. That phase saves tokens by rewriting a
+  repeated prefix into a pointer like `[same prefix as message 3]` — which is
+  a win against a stateless API, but against llama.cpp it destroys the exact
+  prefix match the server needs and forces it to reprocess the whole prompt
+  instead of reusing cached KV state.
+- **Cache alignment turns on by default**, normalizing volatile UUIDs and
+  timestamps that would otherwise change the prompt prefix — and therefore
+  bust the slot cache — on every single turn.
+- **JSON canonicalization turns on by default**, re-serializing embedded JSON
+  with sorted keys, compact formatting, and integer normalization (``1.0`` →
+  ``1``). Two JSON documents that differ only in key order tokenize to
+  different sequences and bust the KV cache — canonicalization eliminates
+  this class of misses entirely.
+
+```bash
+legroom proxy --target http://127.0.0.1:8080/v1/chat/completions \
+  --backend llama_cpp --provider-cache implicit
+```
 
 #### Environment variables
 

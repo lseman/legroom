@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from legroom.evaluation import (
+from legroom.analysis.evaluation import (
     CallableTaskEvaluator,
     CompositeTaskEvaluator,
     EvaluationSuite,

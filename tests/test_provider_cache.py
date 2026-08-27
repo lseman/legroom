@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from legroom.provider_cache import (
+from legroom.integration.provider_cache import (
     CachePricing,
     ProviderCachePolicy,
     ProviderCacheUsage,
@@ -29,6 +29,46 @@ def test_cache_policy_adds_stable_controls_without_overwriting_caller():
 def test_cache_policy_rejects_unsupported_retention():
     with pytest.raises(ValueError, match="only '24h'"):
         ProviderCachePolicy(mode="explicit", ttl="30m")
+
+
+def test_cache_policy_rejects_ttl_for_llama_cpp_backend():
+    with pytest.raises(ValueError, match="only meaningful for the 'openai' backend"):
+        ProviderCachePolicy(backend="llama_cpp", ttl="24h")
+
+
+def test_llama_cpp_backend_sets_slot_and_cache_prompt_not_openai_fields():
+    body = {"model": "llama-3", "messages": [{"role": "user", "content": "hi"}]}
+    policy = ProviderCachePolicy(backend="llama_cpp")
+    assert policy.apply(body, protocol="openai_chat")
+    assert body["cache_prompt"] is True
+    assert isinstance(body["id_slot"], int)
+    assert "prompt_cache_key" not in body
+    assert "prompt_cache_retention" not in body
+
+
+def test_llama_cpp_backend_never_overwrites_caller_fields():
+    body = {"model": "llama-3", "cache_prompt": False, "id_slot": 7}
+    policy = ProviderCachePolicy(backend="llama_cpp")
+    assert not policy.apply(body, protocol="openai_chat")
+    assert body["cache_prompt"] is False
+    assert body["id_slot"] == 7
+
+
+def test_llama_cpp_backend_derives_stable_slot_id_from_key():
+    policy = ProviderCachePolicy(backend="llama_cpp", key="conversation-42")
+    first = {"model": "llama-3"}
+    second = {"model": "llama-3"}
+    policy.apply(first, protocol="openai_chat")
+    policy.apply(second, protocol="openai_chat")
+    assert first["id_slot"] == second["id_slot"]
+
+
+def test_llama_cpp_backend_off_mode_is_a_no_op():
+    body = {"model": "llama-3"}
+    assert not ProviderCachePolicy(mode="off", backend="llama_cpp").apply(
+        body, protocol="openai_chat"
+    )
+    assert body == {"model": "llama-3"}
 
 
 @pytest.mark.parametrize(

@@ -7,7 +7,7 @@ import re
 from collections import defaultdict
 from collections.abc import Iterable
 
-from ..tokenizer import count_tokens
+from ..analysis.tokenizer import count_tokens
 from .compressor_registry import CompressOutput
 
 # Below this, factoring out a shared prefix costs more (the "# common: ..."

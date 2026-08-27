@@ -19,8 +19,8 @@ from collections import defaultdict
 from dataclasses import dataclass
 from typing import Any
 
-from ..query_relevance import query_relevance
-from ..tokenizer import count_tokens
+from ..analysis.query_relevance import query_relevance
+from ..analysis.tokenizer import count_tokens
 from .adaptive_sizer import compute_optimal_k
 from .compressor_registry import CompressOutput
 
@@ -134,6 +134,14 @@ class SmartCrusher:
         result = []
         for group in groups:
             if len(group) < self.config.min_group_size:
+                result.extend(group)
+                continue
+
+            # _summarize_group assumes dict items (key/value fields). Groups
+            # of scalars or lists — e.g. a JSON array of strings or ints —
+            # have nothing to summarize by field, so pass them through
+            # untouched rather than crashing on `.items()`.
+            if not all(isinstance(item, dict) for item in group):
                 result.extend(group)
                 continue
 

@@ -61,7 +61,7 @@ def test_compress_empty():
 
 def test_token_counting():
     """Token counting should work."""
-    from legroom.tokenizer import count_tokens, count_tokens_messages
+    from legroom.analysis.tokenizer import count_tokens, count_tokens_messages
 
     assert count_tokens("", model="gpt-4o") == 0
     assert count_tokens("hello", model="gpt-4o") > 0
@@ -69,13 +69,13 @@ def test_token_counting():
 
 
 def test_gpt4o_uses_native_encoding():
-    from legroom.tokenizer import get_encoding
+    from legroom.analysis.tokenizer import get_encoding
 
     assert get_encoding("gpt-4o").name == "o200k_base"
 
 
 def test_protocol_token_count_includes_tool_payloads_and_framing():
-    from legroom.tokenizer import count_tokens_messages
+    from legroom.analysis.tokenizer import count_tokens_messages
 
     plain = [{"role": "assistant", "content": "calling"}]
     with_tool = [

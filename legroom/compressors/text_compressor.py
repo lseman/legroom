@@ -17,7 +17,7 @@ import math
 import re
 from collections import Counter, OrderedDict
 
-from ..tokenizer import count_tokens
+from ..analysis.tokenizer import count_tokens
 from .compressor_registry import CompressOutput
 
 # ---------------------------------------------------------------------------

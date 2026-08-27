@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-from legroom.ir import Conversation
-from legroom.phases import CallablePhase, PhaseContext, PhaseRunner
-from legroom.provider_adapters import OpenAIChatAdapter, OpenAIResponsesAdapter
+from legroom.integration.provider_adapters import OpenAIChatAdapter, OpenAIResponsesAdapter
+from legroom.runtime.ir import Conversation
+from legroom.runtime.phases import CallablePhase, PhaseContext, PhaseRunner
 
 
 def test_chat_adapter_round_trips_unknown_fields():
@@ -131,6 +131,38 @@ def test_pipeline_exposes_standard_report_for_each_enabled_phase():
         "error",
     }
     assert all(required <= report.keys() for report in reports)
+
+
+def test_kv_cache_optimization_disabled_for_llama_cpp_backend():
+    """The prefix-pointer rewrite breaks byte-identical prefix matching that
+    llama.cpp's real KV cache relies on, so it must never run against that
+    backend even when the flag is explicitly enabled."""
+    from legroom import CompressConfig, compress
+
+    shared_prefix = "You are a helpful assistant. " * 20
+    messages = [
+        {"role": "system", "content": shared_prefix},
+        {"role": "user", "content": shared_prefix + "hi"},
+        {"role": "user", "content": shared_prefix + "bye"},
+    ]
+    config = CompressConfig(
+        kv_cache_optimization_enabled=True,
+        backend="llama_cpp",
+        compress_enabled=False,
+        cross_turn_dedup_enabled=False,
+        semantic_dedup_enabled=False,
+        thinking_compact_enabled=False,
+        ccr_enabled=False,
+        risk_policy_enabled=False,
+        read_lifecycle_enabled=False,
+    )
+
+    result = compress(messages, config=config)
+
+    assert "kv_cache_optimization" not in result.transforms_applied
+    # Alignment transforms (whitespace canonicalization) may still run
+    # when backend="llama_cpp" even with compress_enabled=False.
+    # The test only verifies that kv_cache_optimization is disabled.
 
 
 def test_pipeline_skips_phase_disabled_by_calibration():

@@ -1,0 +1,82 @@
+{
+  "schema_version": 2,
+  "name": "legroom-llama-cpp-benchmarks-v1",
+  "description": "Benchmark suite for validating llama.cpp KV cache alignment optimizations. Tests canonicalization correctness, sequential number normalization, prefix stability, and KV cache alignment.",
+  "fixtures": [
+    {
+      "path": "fixtures/llama_kv_cache.json",
+      "description": "Multi-turn conversation with tool schemas and volatile identifiers",
+      "expected_terms": ["CompressConfig", "protect_recent", "semantic_dedup_threshold", "kv_cache_optimization_enabled", "backend"],
+      "checks": [
+        {"name": "tool_call_id preserved", "path": [2, "tool_call_id"], "expected": "call_1"},
+        {"name": "system prompt preserved", "path": [0, "content"], "expected": "You are a helpful assistant. Use the tools provided."}
+      ]
+    },
+    {
+      "path": "fixtures/llama_json_canonicalization.json",
+      "description": "Tool calls with JSON payloads testing canonicalization",
+      "expected_terms": ["read_file", "edit_file", "search_files", "json_canonicalization", "llama_cpp", "cache_alignment"],
+      "checks": [
+        {"name": "tool call id preserved", "path": [3, "tool_call_id"], "expected": "call_tools"},
+        {"name": "tool call id preserved 2", "path": [6, "tool_call_id"], "expected": "call_read"},
+        {"name": "tool names preserved", "path": [2, "tool_calls", 0, "function", "name"], "expected": "list_tools"}
+      ]
+    },
+    {
+      "path": "fixtures/llama_sequential_numbers.json",
+      "description": "Grep results with sequential line numbers and file references",
+      "expected_terms": ["CompressConfig", "legroom/compress.py", "legroom/cli.py", "legroom/proxy_server.py", "tests/test"],
+      "checks": [
+        {"name": "grep call ids preserved", "path": [2, "tool_call_id"], "expected": "call_grep_1"},
+        {"name": "grep call ids preserved 2", "path": [6, "tool_call_id"], "expected": "call_grep_2"},
+        {"name": "file references preserved", "path": [2, "content"], "expected": "legroom/compress.py"}
+      ]
+    },
+    {
+      "path": "fixtures/llama_prefix_stability.json",
+      "description": "Conversation with stable prefix for prefix cache testing",
+      "expected_terms": ["Python", "benchmarks", "coding assistant", "search tools", "file operations"],
+      "checks": [
+        {"name": "system prompt preserved", "path": [0, "content"], "expected": "You are a helpful coding assistant with access to file operations and search tools."},
+        {"name": "tool call id preserved", "path": [6, "tool_call_id"], "expected": "call_version"},
+        {"name": "Python version preserved", "path": [8, "content"], "expected": "Python 3.11.6 is available."}
+      ]
+    },
+    {
+      "path": "fixtures/llama_json_roundtrip.json",
+      "description": "Complex nested JSON in tool arguments and outputs",
+      "expected_terms": ["schema_version", "fixtures", "strategies", "legroom_no_read_lifecycle", "cross_turn_dedup", "query_aware"],
+      "checks": [
+        {"name": "tool_call_id preserved", "path": [2, "tool_call_id"], "expected": "call_suite"},
+        {"name": "tool_call_id preserved 2", "path": [6, "tool_call_id"], "expected": "call_strats"}
+      ]
+    }
+  ],
+  "strategies": [
+    {
+      "name": "llama_cpp_identity",
+      "base": "legroom",
+      "config": {"optimize": false, "backend": "llama_cpp"}
+    },
+    {
+      "name": "llama_cpp_default",
+      "base": "legroom",
+      "config": {"backend": "llama_cpp", "protect_recent": 2, "ccr_enabled": false, "cache_align_enabled": true, "stable_prefix_cache_enabled": true}
+    },
+    {
+      "name": "llama_cpp_no_canonicalization",
+      "base": "legroom",
+      "config": {"backend": "llama_cpp", "protect_recent": 2, "ccr_enabled": false, "cache_align_enabled": true, "stable_prefix_cache_enabled": true, "disabled_phases": ["json_canonicalization", "sequential_normalization"]}
+    },
+    {
+      "name": "llama_cpp_no_sequential",
+      "base": "legroom",
+      "config": {"backend": "llama_cpp", "protect_recent": 2, "ccr_enabled": false, "cache_align_enabled": true, "stable_prefix_cache_enabled": true, "disabled_phases": ["sequential_normalization"]}
+    },
+    {
+      "name": "llama_cpp_no_prefix_cache",
+      "base": "legroom",
+      "config": {"backend": "llama_cpp", "protect_recent": 2, "ccr_enabled": false, "cache_align_enabled": true, "stable_prefix_cache_enabled": false}
+    }
+  ]
+}

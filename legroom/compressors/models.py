@@ -17,7 +17,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from ..config import CompressConfig
+from ..runtime.config import CompressConfig
 
 # Default profile used when no model-specific profile matches.
 _DEFAULT_PROFILE = "default"

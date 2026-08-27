@@ -2,6 +2,24 @@
 
 from ._version import __version__
 
+# Analysis utilities
+from .analysis.cross_turn_dedup import DedupBlock, dedup_blocks
+from .analysis.query_relevance import extract_query_terms, latest_query_terms, query_relevance
+from .analysis.read_lifecycle import (
+    ReadLifecycleConfig,
+    ReadLifecycleResult,
+    ReadState,
+    classify_reads,
+)
+from .analysis.task_replay import (
+    SubprocessTaskRunner,
+    TaskReplayRequest,
+    TaskRunner,
+    TaskRunnerEvaluator,
+    TaskRunnerProtocolError,
+    TaskRunResult,
+)
+
 # CCR
 from .ccr.compression_store import CompressionStore
 from .ccr.marker_resolution import create_resolution_prompt, parse_markers, resolve_marker
@@ -10,10 +28,8 @@ from .ccr.tool_injection import (
     create_ccr_tool_definition,
     create_system_instructions,
 )
-from .compress import CompressResult as CliCompressResult
 
 # Compression
-from .compress import compress
 from .compressors import (
     CodeCompressor,
     CompressInput,
@@ -21,43 +37,35 @@ from .compressors import (
     CompressOutput,
     ContentDetector,
     ContentRouter,
+    JsonCanonicalizeResult,
+    JsonCanonicalizer,
     LogCompressor,
     LosslessResult,
     MLTextCompressor,
     SearchCompressor,
+    SeqNormalizeResult,
     SemanticDedup,
     SemanticDedupResult,
+    SequentialNumberNormalizer,
     SmartCrusher,
     SmartCrusherConfig,
     TextCompressor,
+    ToolSchemaCanonicalizeResult,
+    ToolSchemaCanonicalizer,
     compact_lossless,
     compute_optimal_k,
     count_unique_simhash,
     route_embedded_json,
 )
-from .config import CompressConfig, CompressResult
-from .cross_turn_dedup import DedupBlock, dedup_blocks
-
-# Pipeline
-from .pipeline import TransformPipeline, TransformResult, create_default_pipeline
 
 # Proxy and dashboard
 from .proxy import LegroomProxy, ProxyState, RequestEvent, get_dashboard_html
-from .query_relevance import extract_query_terms, latest_query_terms, query_relevance
-from .read_lifecycle import (
-    ReadLifecycleConfig,
-    ReadLifecycleResult,
-    ReadState,
-    classify_reads,
-)
-from .task_replay import (
-    SubprocessTaskRunner,
-    TaskReplayRequest,
-    TaskRunner,
-    TaskRunnerEvaluator,
-    TaskRunnerProtocolError,
-    TaskRunResult,
-)
+
+# Pipeline
+from .runtime.compress import CompressResult as CliCompressResult
+from .runtime.compress import compress
+from .runtime.config import CompressConfig, CompressResult
+from .runtime.pipeline import TransformPipeline, TransformResult, create_default_pipeline
 
 __all__ = [
     "CCRToolInjector",
@@ -72,6 +80,8 @@ __all__ = [
     "ContentDetector",
     "ContentRouter",
     "DedupBlock",
+    "JsonCanonicalizeResult",
+    "JsonCanonicalizer",
     "LegroomProxy",
     "LogCompressor",
     "LosslessResult",
@@ -82,8 +92,10 @@ __all__ = [
     "ReadState",
     "RequestEvent",
     "SearchCompressor",
+    "SeqNormalizeResult",
     "SemanticDedup",
     "SemanticDedupResult",
+    "SequentialNumberNormalizer",
     "SmartCrusher",
     "SmartCrusherConfig",
     "SubprocessTaskRunner",
@@ -93,6 +105,8 @@ __all__ = [
     "TaskRunnerEvaluator",
     "TaskRunnerProtocolError",
     "TextCompressor",
+    "ToolSchemaCanonicalizeResult",
+    "ToolSchemaCanonicalizer",
     "TransformPipeline",
     "TransformResult",
     "__version__",

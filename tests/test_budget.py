@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-from legroom.budget import (
+from legroom.analysis.budget import (
     BudgetCompressor,
     BudgetResult,
     compress_with_budget,
 )
-from legroom.config import CompressConfig
+from legroom.runtime.config import CompressConfig
 
 
 def _make_long_text(n_words: int = 500) -> str:

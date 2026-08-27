@@ -9,6 +9,14 @@ description = "Context compression proxy — reduces LLM context tokens while pr
 readme = "README.md"
 requires-python = ">=3.12"
 license = "MIT"
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Typing :: Typed",
+]
 dependencies = [
     "tiktoken>=0.7.0",
     "pyyaml>=6.0",
@@ -26,6 +34,7 @@ ml = [
 dev = [
     "build>=1.2.0",
     "mypy>=1.11.0",
+    "pre-commit>=4.6.0",
     "pytest>=8.0",
     "pytest-cov>=5.0.0",
     "pytest-asyncio>=0.24.0",
@@ -43,22 +52,23 @@ version = {attr = "legroom._version.__version__"}
 [tool.setuptools.packages.find]
 include = ["legroom*"]
 
+[tool.setuptools.package-data]
+legroom = ["py.typed"]
+
 [project.scripts]
-legroom = "legroom.cli:main"
-legroom-proxy = "legroom.cli:run_proxy"
-legroom-sdk = "legroom.sdk_worker:main"
+legroom = "legroom.integration.cli:main"
+legroom-proxy = "legroom.integration.cli:run_proxy"
+legroom-sdk = "legroom.integration.sdk_worker:main"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
-pythonpath = ["."]
 
 [tool.mypy]
 python_version = "3.12"
 files = ["legroom"]
 ignore_missing_imports = true
-follow_imports = "skip"
-no_site_packages = true
+follow_imports = "normal"
 check_untyped_defs = true
 no_implicit_optional = true
 warn_redundant_casts = true

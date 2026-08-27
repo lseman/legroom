@@ -1,14 +1,16 @@
 import io
 import json
+
 import pytest
 
-from legroom.sdk_worker import serve, _state, _ensure_state
+from legroom.integration.sdk_worker import serve
 
 
 @pytest.fixture(autouse=True)
 def reset_state():
     """Reset global worker state between tests."""
-    import legroom.sdk_worker as _sw
+    import legroom.integration.sdk_worker as _sw
+
     _sw._state = None
     yield
     _sw._state = None
@@ -146,6 +148,62 @@ def test_worker_cache_get_hit_and_miss():
     )
     assert stats_resp["ok"] is True
     assert stats_resp["stats"]["cache_misses"] >= 1
+
+
+def test_worker_cache_key_includes_compression_config():
+    responses = run_worker(
+        {
+            "id": "config-one",
+            "method": "compress",
+            "messages": [{"role": "user", "content": "same input"}],
+            "config": {"optimize": False},
+        },
+        {
+            "id": "config-two",
+            "method": "compress",
+            "messages": [{"role": "user", "content": "same input"}],
+            "config": {"optimize": True},
+        },
+    )
+
+    assert "compression_cache_hit" not in responses[1]["stats"]["transforms_applied"]
+
+
+def test_worker_shadow_result_does_not_pollute_live_cache():
+    responses = run_worker(
+        {
+            "id": "shadow",
+            "method": "compress",
+            "messages": [{"role": "user", "content": "same input"}],
+            "config": {"optimize": False, "shadow_mode": True},
+        },
+        {
+            "id": "live",
+            "method": "compress",
+            "messages": [{"role": "user", "content": "same input"}],
+            "config": {"optimize": False},
+        },
+    )
+
+    assert "compression_cache_hit" not in responses[1]["stats"]["transforms_applied"]
+
+
+def test_worker_cache_hits_are_recorded_in_metrics_and_history():
+    request = {
+        "method": "compress",
+        "messages": [{"role": "user", "content": "cache me"}],
+        "config": {"optimize": False},
+    }
+    responses = run_worker(
+        {"id": "miss", **request},
+        {"id": "hit", **request},
+        {"id": "stats", "method": "worker_stats"},
+        {"id": "history", "method": "worker_history"},
+    )
+
+    assert "compression_cache_hit" in responses[1]["stats"]["transforms_applied"]
+    assert responses[2]["stats"]["total_requests"] == 2
+    assert responses[3]["total"] == 2
 
 
 def test_worker_calibration_record_and_status():

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import re
 
-from ..tokenizer import count_tokens
+from ..analysis.tokenizer import count_tokens
 from .compressor_registry import CompressOutput
 
 # Triple-quote string delimiters defined via chr() to avoid syntax issues

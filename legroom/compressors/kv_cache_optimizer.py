@@ -293,5 +293,5 @@ class KVOptimizer:
 
 def count_tokens_messages(messages: list[dict[str, Any]], model: str = "gpt-4o") -> int:
     """Count tokens in a list of messages (inline to avoid circular import)."""
-    from ..tokenizer import count_tokens_messages as _ctm
+    from ..analysis.tokenizer import count_tokens_messages as _ctm
     return _ctm(messages, model)

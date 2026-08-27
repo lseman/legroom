@@ -5,8 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Literal
 
-from ..ir import Conversation
-from ..provider_adapters import AdaptedConversation, adapter_for_path
+from ..integration.provider_adapters import AdaptedConversation, adapter_for_path
+from ..runtime.ir import Conversation
 
 ProxyMode = Literal["token", "cache"]
 

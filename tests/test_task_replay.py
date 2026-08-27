@@ -5,8 +5,8 @@ import sys
 
 import pytest
 
-from legroom.evaluation import Fixture
-from legroom.task_replay import (
+from legroom.analysis.evaluation import Fixture
+from legroom.analysis.task_replay import (
     SubprocessTaskRunner,
     TaskReplayRequest,
     TaskRunnerEvaluator,
